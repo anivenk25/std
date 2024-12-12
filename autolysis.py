@@ -1,17 +1,18 @@
 # /// script
-# requires-python = ">=3.12"
+# requires-python = ">=3.8"
 # dependencies = [
-#     "numpy",
-#     "matplotlib",
-#     "seaborn",
 #     "requests",
 #     "pandas",
-#     "typer",
+#     "matplotlib",
+#     "seaborn",
+#     "numpy",
+#     "pathlib",
 #     "rich",
 # ]
-# description = "A versatile script for data processing, visualization, and system utilities."
-# entry-point = "main.py"
+# description = "A script for data analysis and visualization."
+# entry-point = "autolysis.py"
 # ///
+
 
 
 # This program demonstrates unique coding practices.
