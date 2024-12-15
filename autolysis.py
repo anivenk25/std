@@ -523,7 +523,6 @@ class DataAnalyzer:
             df = self._load_and_validate_dataset(file_path)
             print(f"Successfully loaded dataset with shape: {df.shape}")
 
-            stats = self.stats_analyzer.compute_advanced_stats(df)
             print("\nGenerating visualizations and analysis...")
             
             self._generate_visualizations(df)
@@ -680,9 +679,6 @@ def main():
         print(f"Program failed: {str(e)}")
         traceback.print_exc()
         sys.exit(1)
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
