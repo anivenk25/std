@@ -1,14 +1,15 @@
 # /// script
 # requires-python = ">=3.8"
-# dependencies = [
-#     "requests",
-#     "pandas",
-#     "matplotlib",
-#     "seaborn",
-#     "numpy",
-#     "pathlib",
-#     "rich",
-# ]
+#dependencies = [
+#   "requests>=2.28.0",
+#    "pandas>=1.5.0",
+#    "matplotlib>=3.5.0",
+#    "seaborn>=0.12.0",
+#    "numpy>=1.21.0",
+#    "rich>=12.0.0",
+#    "scipy>=1.9.0",
+#    "scikit-learn>=1.0.0",
+#]
 # description = "A script for data analysis and visualization."
 # entry-point = "autolysis.py"
 # ///
@@ -33,6 +34,21 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import sys
 import shutil
+from scipy import stats
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import time
+from functools import wraps
+
+def timeit(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        print(f"{func.__name__} took {end - start:.2f} seconds")
+        return result
+    return wrapper
 
 @dataclass
 class AnalysisConfig:
@@ -42,6 +58,7 @@ class AnalysisConfig:
     visualization_dpi: int = 300
     token_limit: int = 4000
     output_dir: Path = Path("output")
+    time_limit: int = 180  # 3 minutes in seconds
 
 class APIClient:
     """Handles API communication with LLM service"""
@@ -74,6 +91,52 @@ class APIClient:
         except Exception as e:
             print(f"API request failed: {str(e)}")
             return None
+
+class StatisticalMethods:
+    """Collection of statistical analysis methods"""
+    
+    @staticmethod
+    def basic_stats(data: pd.DataFrame) -> Dict[str, Any]:
+        return {
+            'summary': data.describe(),
+            'missing': data.isnull().sum(),
+            'dtypes': data.dtypes
+        }
+
+    @staticmethod
+    def normality_test(data: pd.Series) -> Dict[str, Any]:
+        if len(data) < 3:
+            return {'error': 'Insufficient data'}
+        statistic, p_value = stats.normaltest(data.dropna())
+        return {
+            'statistic': statistic,
+            'p_value': p_value,
+            'is_normal': p_value > 0.05
+        }
+
+    @staticmethod
+    def outlier_detection(data: pd.Series) -> Dict[str, Any]:
+        Q1 = data.quantile(0.25)
+        Q3 = data.quantile(0.75)
+        IQR = Q3 - Q1
+        outliers = data[(data < (Q1 - 1.5 * IQR)) | (data > (Q3 + 1.5 * IQR))]
+        return {
+            'outlier_count': len(outliers),
+            'outlier_percentage': (len(outliers) / len(data)) * 100,
+            'outlier_values': outliers.tolist()
+        }
+
+    @staticmethod
+    def dimension_reduction(data: pd.DataFrame, n_components: int = 2) -> Dict[str, Any]:
+        scaler = StandardScaler()
+        scaled_data = scaler.fit_transform(data)
+        pca = PCA(n_components=n_components)
+        transformed = pca.fit_transform(scaled_data)
+        return {
+            'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
+            'cumulative_variance_ratio': np.cumsum(pca.explained_variance_ratio_).tolist(),
+            'components': transformed.tolist()
+        }
 
 class VisualizationStrategy(ABC):
     """Abstract base class for visualization strategies"""
@@ -110,27 +173,98 @@ class DistributionPlot(VisualizationStrategy):
         plt.close()
 
 class StatisticalAnalyzer:
-    """Handles statistical analysis of data"""
-    def compute_advanced_stats(self, df: pd.DataFrame) -> Dict[str, Any]:
-        stats = {
-            'basic_stats': df.describe(),
-            'missing_data': {
-                'missing_counts': df.isnull().sum(),
-                'missing_percentages': (df.isnull().sum() / len(df)) * 100
-            }
+    """Enhanced statistical analyzer with method selection"""
+    def __init__(self):
+        self.methods = StatisticalMethods()
+        self.api_client = APIClient()
+        
+    @timeit
+    def select_analysis_methods(self, df: pd.DataFrame) -> List[str]:
+        """Use LLM to select appropriate statistical methods"""
+        # Convert dtypes to strings for JSON serialization
+        data_description = {
+            'shape': list(df.shape),
+            'dtypes': {col: str(dtype) for col, dtype in df.dtypes.items()},
+            'missing_values': df.isnull().sum().to_dict(),
+            'numeric_columns': df.select_dtypes(include=[np.number]).columns.tolist()
         }
         
-        numeric_df = df.select_dtypes(include=[np.number])
-        if not numeric_df.empty:
-            stats.update({
-                'advanced_stats': {
-                    'skewness': numeric_df.skew(),
-                    'kurtosis': numeric_df.kurtosis(),
-                    'correlations': numeric_df.corr()
-                }
-            })
+        prompt = f"""
+        Given the following dataset characteristics:
+        Shape: {data_description['shape']}
+        Data Types: {json.dumps(data_description['dtypes'], indent=2)}
+        Missing Values: {json.dumps(data_description['missing_values'], indent=2)}
+        Numeric Columns: {json.dumps(data_description['numeric_columns'], indent=2)}
         
-        return stats
+        Available statistical methods:
+        1. basic_stats: Basic statistical summary
+        2. normality_test: Test for normal distribution
+        3. outlier_detection: Identify outliers using IQR
+        4. dimension_reduction: PCA for dimensionality reduction
+        
+        Select the most appropriate methods considering:
+        - Dataset size and characteristics
+        - Time constraint (analysis should complete within 3 minutes)
+        - Data types present
+        
+        Return a list of method names to apply.
+        """
+        
+        messages = [
+            {"role": "system", "content": "You are a statistical analysis expert."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        response = self.api_client.make_request(messages)
+        if not response:
+            return ['basic_stats']
+            
+        methods = []
+        if 'basic_stats' in response.lower():
+            methods.append('basic_stats')
+        if 'normality' in response.lower():
+            methods.append('normality_test')
+        if 'outlier' in response.lower():
+            methods.append('outlier_detection')
+        if 'dimension' in response.lower() or 'pca' in response.lower():
+            methods.append('dimension_reduction')
+            
+        return methods
+
+    @timeit
+    def compute_advanced_stats(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Compute statistical analysis based on selected methods"""
+        selected_methods = self.select_analysis_methods(df)
+        results = {}
+        
+        numeric_df = df.select_dtypes(include=[np.number])
+        
+        for method in selected_methods:
+            try:
+                if method == 'basic_stats':
+                    results['basic_stats'] = self.methods.basic_stats(df)
+                
+                elif method == 'normality_test' and not numeric_df.empty:
+                    results['normality_tests'] = {
+                        col: self.methods.normality_test(numeric_df[col])
+                        for col in numeric_df.columns
+                    }
+                
+                elif method == 'outlier_detection' and not numeric_df.empty:
+                    results['outlier_analysis'] = {
+                        col: self.methods.outlier_detection(numeric_df[col])
+                        for col in numeric_df.columns
+                    }
+                
+                elif method == 'dimension_reduction' and not numeric_df.empty:
+                    if numeric_df.shape[1] > 2:
+                        results['dimension_reduction'] = self.methods.dimension_reduction(numeric_df)
+                
+            except Exception as e:
+                print(f"Error in {method}: {str(e)}")
+                continue
+                
+        return results
 
 class DataAnalyzer:
     """Enhanced data analyzer with comprehensive analysis capabilities"""
@@ -144,41 +278,39 @@ class DataAnalyzer:
         ]
         self.plots: List[str] = []
         
+    @timeit
     def analyze_dataset(self, file_path: str):
         """Main method to analyze the dataset"""
         try:
+            start_time = time.time()
             self._create_output_directory()
             df = self._load_and_validate_dataset(file_path)
             print(f"Successfully loaded dataset with shape: {df.shape}")
 
-            # Generate initial analysis
             stats = self.stats_analyzer.compute_advanced_stats(df)
             print("\nGenerating visualizations and analysis...")
             
-            # Generate visualizations
             self._generate_visualizations(df)
             
-            # Generate insights
             insights = self._generate_insights(df, stats)
             
-            # Generate narrative
-            narrative = self._generate_narrative(df, stats, insights)
-            
-            if narrative:
-                self._generate_readme(narrative)
+            if time.time() - start_time < self.config.time_limit:
+                narrative = self._generate_narrative(df, stats, insights)
+                if narrative:
+                    self._generate_readme(narrative)
+            else:
+                print("Time limit reached, skipping narrative generation")
                 
         except Exception as e:
             print(f"Analysis failed: {str(e)}")
             traceback.print_exc()
 
     def _create_output_directory(self):
-        """Create or clean output directory"""
         if self.config.output_dir.exists():
             shutil.rmtree(self.config.output_dir)
         self.config.output_dir.mkdir(parents=True)
 
     def _load_and_validate_dataset(self, file_path: str) -> pd.DataFrame:
-        """Load and validate dataset with error handling"""
         path = Path(file_path)
         if not path.exists() or not path.is_file() or path.suffix.lower() != '.csv':
             raise ValueError(f"Invalid file path: {file_path}")
@@ -194,26 +326,20 @@ class DataAnalyzer:
         return df
 
     def _generate_visualizations(self, df: pd.DataFrame):
-        """Generate visualizations using all strategies"""
         for i, strategy in enumerate(self.visualization_strategies):
             viz_path = self.config.output_dir / f'visualization_{i}.png'
-            strategy.create_visualization(
-                df, 
-                viz_path, 
-                f"Analysis {i+1}"
-            )
+            strategy.create_visualization(df, viz_path, f"Analysis {i+1}")
             self.plots.append(viz_path.name)
 
     def _generate_insights(self, df: pd.DataFrame, stats: Dict[str, Any]) -> str:
-        """Generate insights using LLM"""
         prompt = f"""
         Analyze this dataset based on the following information:
 
         1. Dataset Statistics:
-        {stats['basic_stats'].to_string()}
+        {stats['basic_stats']['summary'].to_string()}
 
-        2. Missing Data Analysis:
-        {stats['missing_data']['missing_counts'].to_string()}
+        2. Advanced Analysis:
+        {json.dumps(stats, indent=2, default=str)}
 
         Please provide:
         1. Key patterns and trends
@@ -237,14 +363,13 @@ class DataAnalyzer:
         return ""
 
     def _generate_narrative(self, df: pd.DataFrame, stats: Dict[str, Any], insights: str) -> str:
-        """Generate narrative story from analysis"""
         subject = self._determine_subject(df)
         
         story_prompt = f"""
         Create an engaging narrative about this {subject} dataset:
 
         Key Statistics:
-        {stats['basic_stats'].to_string()}
+        {stats['basic_stats']['summary'].to_string()}
 
         Insights:
         {insights}
@@ -255,8 +380,6 @@ class DataAnalyzer:
         3. Make it engaging and memorable
         4. Include implications and recommendations
         5. Use clear sections and structure
-
-        The narrative should flow naturally while incorporating technical insights.
         """
 
         messages = [
@@ -271,7 +394,6 @@ class DataAnalyzer:
         return ""
 
     def _determine_subject(self, df: pd.DataFrame) -> str:
-        """Determine dataset subject using column analysis"""
         columns_str = ' '.join(df.columns.str.lower())
         common_subjects = {
             'book': ['book', 'author', 'title', 'publisher'],
@@ -287,7 +409,6 @@ class DataAnalyzer:
         return "dataset"
 
     def _generate_readme(self, narrative: str):
-        """Generate README with narrative and visualizations"""
         readme_content = "# Data Analysis Narrative\n\n"
         readme_content += narrative + "\n\n"
         
