@@ -29,10 +29,10 @@ matplotlib.use('Agg')  # Set backend before importing pyplot
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
-import re
 import traceback
+import re
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import sys
@@ -44,7 +44,7 @@ import time
 from functools import wraps
 
 def timeit(func):
-    """Decorator to measure function execution time."""
+    """Decorator to measure execution time of functions."""
     @wraps(func)
     def wrapper(*args, **kwargs):
         start = time.time()
@@ -101,7 +101,7 @@ class StatisticalMethods:
     
     @staticmethod
     def basic_stats(data: pd.DataFrame) -> Dict[str, Any]:
-        """Calculate basic statistics."""
+        """Calculate basic statistics for the DataFrame."""
         return {
             'summary': data.describe(),
             'missing': data.isnull().sum(),
@@ -110,7 +110,7 @@ class StatisticalMethods:
 
     @staticmethod
     def normality_test(data: pd.Series) -> Dict[str, Any]:
-        """Perform normality test."""
+        """Perform a normality test on the data."""
         if len(data) < 3:
             return {'error': 'Insufficient data'}
         statistic, p_value = stats.normaltest(data.dropna())
@@ -122,7 +122,7 @@ class StatisticalMethods:
 
     @staticmethod
     def outlier_detection(data: pd.Series) -> Dict[str, Any]:
-        """Detect outliers using IQR method."""
+        """Detect outliers in the data using IQR."""
         Q1 = data.quantile(0.25)
         Q3 = data.quantile(0.75)
         IQR = Q3 - Q1
@@ -150,25 +150,23 @@ class VisualizationStrategy(ABC):
     """Abstract base class for visualization strategies."""
     @abstractmethod
     def create_visualization(self, df: pd.DataFrame, fig_path: Path, title: str) -> None:
+        """Create a visualization and save it to a file."""
         pass
 
 class CorrelationHeatmap(VisualizationStrategy):
-    """Generate a correlation heatmap."""
     def create_visualization(self, df: pd.DataFrame, fig_path: Path, title: str) -> None:
+        """Create a correlation heatmap."""
         numeric_df = df.select_dtypes(include=[np.number])
         plt.figure(figsize=(12, 8))
+        sns.heatmap(numeric_df.corr(), annot=True, cmap='coolwarm', center=0)
         plt.title(f"Correlation Heatmap - {title}")
-        plt.imshow(numeric_df.corr(), cmap='coolwarm', interpolation='nearest')
-        plt.colorbar()
-        plt.xticks(ticks=np.arange(len(numeric_df.columns)), labels=numeric_df.columns, rotation=45)
-        plt.yticks(ticks=np.arange(len(numeric_df.columns)), labels=numeric_df.columns)
         plt.tight_layout()
         plt.savefig(fig_path, dpi=300)
         plt.close()
 
 class DistributionPlot(VisualizationStrategy):
-    """Generate distribution plots."""
     def create_visualization(self, df: pd.DataFrame, fig_path: Path, title: str) -> None:
+        """Create distribution plots for numeric columns."""
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         n_cols = len(numeric_cols)
         if n_cols == 0:
@@ -177,10 +175,8 @@ class DistributionPlot(VisualizationStrategy):
         plt.figure(figsize=(15, 5 * ((n_cols + 1) // 2)))
         for i, col in enumerate(numeric_cols, 1):
             plt.subplot(((n_cols + 1) // 2), 2, i)
-            plt.hist(df[col], bins=30, alpha=0.7, color='blue', edgecolor='black')
+            sns.histplot(df[col], kde=True)
             plt.title(f"Distribution of {col}")
-            plt.xlabel(col)
-            plt.ylabel("Frequency")
         
         plt.suptitle(f"Distribution Analysis - {title}")
         plt.tight_layout()
@@ -188,6 +184,7 @@ class DistributionPlot(VisualizationStrategy):
         plt.close()
 
 class LLMAnalyzer:
+    """Class to analyze datasets using LLM for code generation and insights."""
     def __init__(self):
         self.token = os.getenv("AIPROXY_TOKEN")
         if not self.token:
@@ -231,7 +228,7 @@ class LLMAnalyzer:
         code_blocks = re.findall(r'```python\n(.*?)\n```', content, re.DOTALL)
         return code_blocks if code_blocks else []
 
-    def _execute_code_safely(self, code: str, df: pd.DataFrame) -> tuple[bool, Optional[str]]:
+    def _execute_code_safely(self, code: str, df: pd.DataFrame) -> Tuple[bool, Optional[str]]:
         """Execute code with safety measures and return success status and error message."""
         try:
             # Ensure the code uses the provided DataFrame
@@ -239,7 +236,7 @@ class LLMAnalyzer:
                 raise ValueError("Code should not read from CSV files directly. Use the provided DataFrame 'df'.")
 
             # Modify the code to save plots instead of showing them
-            code = code.replace('plt.show()', 'analyzer._save_and_close_plot("Generated Plot")')
+            code = code.replace('plt.show()', 'self._save_and_close_plot("Generated Plot")')
 
             # Create a restricted locals dictionary with only necessary objects
             local_dict = {
@@ -393,8 +390,8 @@ class LLMAnalyzer:
             traceback.print_exc()
 
     def _generate_final_insights(self, df: pd.DataFrame):
-        subject = self._determine_subject(df)
         """Generate final insights after analysis."""
+        subject = self._determine_subject(df)
         # Create a summary of the numerical analysis
         numerical_summary = df.describe().to_string()
 
@@ -435,7 +432,7 @@ class LLMAnalyzer:
             print(insights)
             return str(insights)
 
-    def _generate_epic_story(self, df: pd.DataFrame, insights):
+    def _generate_epic_story(self, df: pd.DataFrame, insights: str):
         """Generate an epic narrative based on the data analysis."""
         # Create summaries for context
         numerical_summary = df.describe().to_string()
@@ -450,7 +447,7 @@ class LLMAnalyzer:
 
         - {df.shape} data points each representing a unique journey of {subject}.
         - {df.columns.tolist()}, each column a chapter in the saga of {subject}.
-        - {df.head(3).to_string()}, where the first sparks of {subject} intertwine.
+        -  {df.head(3).to_string()}, where the first sparks of {subject} intertwine.
 
         - {missing_values}, like unspoken words in a love letter, leaving gaps in the narrative that yearn to be filled with understanding.
 
@@ -466,7 +463,7 @@ class LLMAnalyzer:
 
         ADD DRAMA ADD LOVE ADD THRILL ADD HERO ENTRY AND COOL SHIT LIKE THAT 
 
-        THE STORY MUST BE VERY MEMORABLE AND MUST APPEASE INDIAN AUDIENCE BUT YOU CAN MAKE THE STORY NON INDIAN TOO IF NEEDED.
+        THE STORY MUST BE VERY MEMEORABLE AND MUST APPEASE INDIAN AUDIENCE BUT YOU CAN MAKE THE STORY NON INDIAN TOO IF NEEDED.
 
         AGAIN THE FINAL INSIGHTS SECTION IS GODLIKE -- FOLLOW IT AND PRESENT AS MUCH INFO FROM THAT IN THE STORY AS POSSIBLE
 
@@ -502,12 +499,107 @@ class LLMAnalyzer:
                 return "Analysis of Ratings"  # Example genre
         return "Various Themes"  # Default genre if no keywords found
 
+class StatisticalAnalyzer:
+    """Enhanced statistical analyzer with method selection."""
+    def __init__(self):
+        self.methods = StatisticalMethods()
+        self.api_client = APIClient()
+        
+    @timeit
+    def select_analysis_methods(self, df: pd.DataFrame) -> List[str]:
+        """Use LLM to select appropriate statistical methods."""
+        # Convert dtypes to strings for JSON serialization
+        data_description = {
+            'shape': list(df.shape),
+            'dtypes': {col: str(dtype) for col, dtype in df.dtypes.items()},
+            'missing_values': df.isnull().sum().to_dict(),
+            'numeric_columns': df.select_dtypes(include=[np.number]).columns.tolist()
+        }
+        
+        prompt = f"""
+        Given the following dataset characteristics:
+        Shape: {data_description['shape']}
+        Data Types: {json.dumps(data_description['dtypes'], indent=2)}
+        Missing Values: {json.dumps(data_description['missing_values'], indent=2)}
+        Numeric Columns: {json.dumps(data_description['numeric_columns'], indent=2)}
+        
+        Available statistical methods:
+        1. basic_stats: Basic statistical summary
+        2. normality_test: Test for normal distribution
+        3. outlier_detection: Identify outliers using IQR
+        4. dimension_reduction: PCA for dimensionality reduction
+        
+        Select the most appropriate methods considering:
+        - Dataset size and characteristics
+        - Time constraint (analysis should complete within 3 minutes)
+        - Data types present
+        
+        Return a list of method names to apply.
+        """
+        
+        messages = [
+            {"role": "system", "content": "You are a statistical analysis expert."},
+            {"role": "user", "content": prompt}
+        ]
+        
+        response = self.api_client.make_request(messages)
+        if not response:
+            return ['basic_stats']
+            
+        methods = []
+        if 'basic_stats' in response.lower():
+            methods.append('basic_stats')
+        if 'normality' in response.lower():
+            methods.append('normality_test')
+        if 'outlier' in response.lower():
+            methods.append('outlier_detection')
+        if 'dimension' in response.lower() or 'pca' in response.lower():
+            methods.append('dimension_reduction')
+            
+        return methods
+
+    @timeit
+    def compute_advanced_stats(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Compute statistical analysis based on selected methods."""
+        selected_methods = self.select_analysis_methods(df)
+        results = {}
+        
+        numeric_df = df.select_dtypes(include=[np.number])
+        
+        for method in selected_methods:
+            try:
+                if method == 'basic_stats':
+                    results['basic_stats'] = self.methods.basic_stats(df)
+                
+                elif method == 'normality_test' and not numeric_df.empty:
+                    results['normality_tests'] = {
+                        col: self.methods.normality_test(numeric_df[col])
+                        for col in numeric_df.columns
+                    }
+                
+                elif method == 'outlier_detection' and not numeric_df.empty:
+                    results['outlier_analysis'] = {
+                        col: self.methods.outlier_detection(numeric_df[col])
+                        for col in numeric_df.columns
+                    }
+                
+                elif method == 'dimension_reduction' and not numeric_df.empty:
+                    if numeric_df.shape[1] > 2:
+                        results['dimension_reduction'] = self.methods.dimension_reduction(numeric_df)
+                
+            except Exception as e:
+                print(f"Error in {method}: {str(e)}")
+                continue
+                
+        return results
+
 class DataAnalyzer:
     """Enhanced data analyzer with comprehensive analysis capabilities."""
     def __init__(self, config: AnalysisConfig):
         self.config = config
         self.api_client = APIClient()
-        self.stats_analyzer = StatisticalMethods()
+        self.stats_analyzer = StatisticalAnalyzer()
+        self.llm_analyzer = LLMAnalyzer()  # Integrate LLMAnalyzer
         self.visualization_strategies = [
             CorrelationHeatmap(),
             DistributionPlot()
@@ -523,6 +615,10 @@ class DataAnalyzer:
             df = self._load_and_validate_dataset(file_path)
             print(f"Successfully loaded dataset with shape: {df.shape}")
 
+            # Use LLMAnalyzer for analysis
+            self.llm_analyzer.analyze_dataset(file_path)
+
+            stats = self.stats_analyzer.compute_advanced_stats(df)
             print("\nGenerating visualizations and analysis...")
             
             self._generate_visualizations(df)
@@ -541,13 +637,13 @@ class DataAnalyzer:
             traceback.print_exc()
 
     def _create_output_directory(self):
-        """Create or clean output directory."""
+        """Create output directory for saving results."""
         if self.config.output_dir.exists():
             shutil.rmtree(self.config.output_dir)
         self.config.output_dir.mkdir(parents=True)
 
     def _load_and_validate_dataset(self, file_path: str) -> pd.DataFrame:
-        """Load and validate dataset."""
+        """Load and validate the dataset from the given file path."""
         path = Path(file_path)
         if not path.exists() or not path.is_file() or path.suffix.lower() != '.csv':
             raise ValueError(f"Invalid file path: {file_path}")
@@ -570,7 +666,7 @@ class DataAnalyzer:
             self.plots.append(viz_path.name)
 
     def _generate_insights(self, df: pd.DataFrame, stats: Dict[str, Any]) -> str:
-        """Generate insights based on statistical analysis."""
+        """Generate insights based on the dataset and statistical analysis."""
         prompt = f"""
         Analyze this dataset based on the following information:
 
@@ -602,7 +698,7 @@ class DataAnalyzer:
         return ""
 
     def _generate_narrative(self, df: pd.DataFrame, stats: Dict[str, Any], insights: str) -> str:
-        """Generate a narrative based on the analysis."""
+        """Generate a narrative based on the dataset analysis."""
         subject = self._determine_subject(df)
         
         story_prompt = f"""
@@ -634,7 +730,7 @@ class DataAnalyzer:
         return ""
 
     def _determine_subject(self, df: pd.DataFrame) -> str:
-        """Determine the subject of the dataset based on column names."""
+        """Determine the subject of the dataset based on its content."""
         columns_str = ' '.join(df.columns.str.lower())
         common_subjects = {
             'book': ['book', 'author', 'title', 'publisher'],
@@ -650,7 +746,7 @@ class DataAnalyzer:
         return "dataset"
 
     def _generate_readme(self, narrative: str):
-        """Generate a README file with the narrative and visualizations."""
+        """Generate a README file with the analysis narrative and visualizations."""
         readme_content = "# Data Analysis Narrative\n\n"
         readme_content += narrative + "\n\n"
         
