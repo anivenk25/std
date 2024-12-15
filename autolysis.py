@@ -29,7 +29,7 @@ import seaborn as sns
 import numpy as np
 from pathlib import Path
 import traceback
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import sys
@@ -41,6 +41,7 @@ import time
 from functools import wraps
 
 def timeit(func):
+    """Decorator to measure function execution time"""
     @wraps(func)
     def wrapper(*args, **kwargs):
         start = time.time()
@@ -58,10 +59,10 @@ class AnalysisConfig:
     visualization_dpi: int = 300
     token_limit: int = 4000
     output_dir: Path = Path("output")
-    time_limit: int = 180  # 3 minutes in seconds
+    time_limit: int = 180  # 3 minutes
 
 class APIClient:
-    """Handles API communication with LLM service"""
+    """Handles API communication"""
     def __init__(self):
         self.token = os.getenv("AIPROXY_TOKEN")
         if not self.token:
@@ -78,7 +79,9 @@ class APIClient:
         try:
             data = {
                 "model": "gpt-4o-mini",
-                "messages": messages
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 1000
             }
             response = requests.post(
                 self.proxy_url, 
@@ -93,10 +96,11 @@ class APIClient:
             return None
 
 class StatisticalMethods:
-    """Collection of statistical analysis methods"""
+    """Statistical analysis methods"""
     
     @staticmethod
     def basic_stats(data: pd.DataFrame) -> Dict[str, Any]:
+        """Calculate basic statistics"""
         return {
             'summary': data.describe(),
             'missing': data.isnull().sum(),
@@ -105,6 +109,7 @@ class StatisticalMethods:
 
     @staticmethod
     def normality_test(data: pd.Series) -> Dict[str, Any]:
+        """Perform normality test"""
         if len(data) < 3:
             return {'error': 'Insufficient data'}
         statistic, p_value = stats.normaltest(data.dropna())
@@ -116,6 +121,7 @@ class StatisticalMethods:
 
     @staticmethod
     def outlier_detection(data: pd.Series) -> Dict[str, Any]:
+        """Detect outliers using IQR method"""
         Q1 = data.quantile(0.25)
         Q3 = data.quantile(0.75)
         IQR = Q3 - Q1
@@ -126,18 +132,6 @@ class StatisticalMethods:
             'outlier_values': outliers.tolist()
         }
 
-    @staticmethod
-    def dimension_reduction(data: pd.DataFrame, n_components: int = 2) -> Dict[str, Any]:
-        scaler = StandardScaler()
-        scaled_data = scaler.fit_transform(data)
-        pca = PCA(n_components=n_components)
-        transformed = pca.fit_transform(scaled_data)
-        return {
-            'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
-            'cumulative_variance_ratio': np.cumsum(pca.explained_variance_ratio_).tolist(),
-            'components': transformed.tolist()
-        }
-
 class VisualizationStrategy(ABC):
     """Abstract base class for visualization strategies"""
     @abstractmethod
@@ -145,6 +139,7 @@ class VisualizationStrategy(ABC):
         pass
 
 class CorrelationHeatmap(VisualizationStrategy):
+    """Creates correlation heatmap"""
     def create_visualization(self, df: pd.DataFrame, fig_path: Path, title: str) -> None:
         numeric_df = df.select_dtypes(include=[np.number])
         plt.figure(figsize=(12, 8))
@@ -155,6 +150,7 @@ class CorrelationHeatmap(VisualizationStrategy):
         plt.close()
 
 class DistributionPlot(VisualizationStrategy):
+    """Creates distribution plots"""
     def create_visualization(self, df: pd.DataFrame, fig_path: Path, title: str) -> None:
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         n_cols = len(numeric_cols)
@@ -173,67 +169,19 @@ class DistributionPlot(VisualizationStrategy):
         plt.close()
 
 class StatisticalAnalyzer:
-    """Enhanced statistical analyzer with method selection"""
+    """Handles statistical analysis"""
     def __init__(self):
         self.methods = StatisticalMethods()
         self.api_client = APIClient()
         
     @timeit
     def select_analysis_methods(self, df: pd.DataFrame) -> List[str]:
-        """Use LLM to select appropriate statistical methods"""
-        # Convert dtypes to strings for JSON serialization
-        data_description = {
-            'shape': list(df.shape),
-            'dtypes': {col: str(dtype) for col, dtype in df.dtypes.items()},
-            'missing_values': df.isnull().sum().to_dict(),
-            'numeric_columns': df.select_dtypes(include=[np.number]).columns.tolist()
-        }
-        
-        prompt = f"""
-        Given the following dataset characteristics:
-        Shape: {data_description['shape']}
-        Data Types: {json.dumps(data_description['dtypes'], indent=2)}
-        Missing Values: {json.dumps(data_description['missing_values'], indent=2)}
-        Numeric Columns: {json.dumps(data_description['numeric_columns'], indent=2)}
-        
-        Available statistical methods:
-        1. basic_stats: Basic statistical summary
-        2. normality_test: Test for normal distribution
-        3. outlier_detection: Identify outliers using IQR
-        4. dimension_reduction: PCA for dimensionality reduction
-        
-        Select the most appropriate methods considering:
-        - Dataset size and characteristics
-        - Time constraint (analysis should complete within 3 minutes)
-        - Data types present
-        
-        Return a list of method names to apply.
-        """
-        
-        messages = [
-            {"role": "system", "content": "You are a statistical analysis expert."},
-            {"role": "user", "content": prompt}
-        ]
-        
-        response = self.api_client.make_request(messages)
-        if not response:
-            return ['basic_stats']
-            
-        methods = []
-        if 'basic_stats' in response.lower():
-            methods.append('basic_stats')
-        if 'normality' in response.lower():
-            methods.append('normality_test')
-        if 'outlier' in response.lower():
-            methods.append('outlier_detection')
-        if 'dimension' in response.lower() or 'pca' in response.lower():
-            methods.append('dimension_reduction')
-            
-        return methods
+        """Select appropriate statistical methods"""
+        return ['basic_stats', 'normality_test', 'outlier_detection']
 
     @timeit
     def compute_advanced_stats(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Compute statistical analysis based on selected methods"""
+        """Compute statistical analysis"""
         selected_methods = self.select_analysis_methods(df)
         results = {}
         
@@ -256,10 +204,6 @@ class StatisticalAnalyzer:
                         for col in numeric_df.columns
                     }
                 
-                elif method == 'dimension_reduction' and not numeric_df.empty:
-                    if numeric_df.shape[1] > 2:
-                        results['dimension_reduction'] = self.methods.dimension_reduction(numeric_df)
-                
             except Exception as e:
                 print(f"Error in {method}: {str(e)}")
                 continue
@@ -267,7 +211,7 @@ class StatisticalAnalyzer:
         return results
 
 class DataAnalyzer:
-    """Enhanced data analyzer with comprehensive analysis capabilities"""
+    """Main data analyzer class"""
     def __init__(self, config: AnalysisConfig):
         self.config = config
         self.api_client = APIClient()
@@ -280,37 +224,47 @@ class DataAnalyzer:
         
     @timeit
     def analyze_dataset(self, file_path: str):
-        """Main method to analyze the dataset"""
+        """Main analysis method"""
         try:
             start_time = time.time()
             self._create_output_directory()
-            df = self._load_and_validate_dataset(file_path)
-            print(f"Successfully loaded dataset with shape: {df.shape}")
-
-            stats = self.stats_analyzer.compute_advanced_stats(df)
-            print("\nGenerating visualizations and analysis...")
             
+            print("Loading dataset...")
+            df = self._load_and_validate_dataset(file_path)
+            print(f"Dataset loaded successfully: {df.shape[0]} rows, {df.shape[1]} columns")
+
+            print("Computing statistical analysis...")
+            stats = self.stats_analyzer.compute_advanced_stats(df)
+            
+            print("Generating visualizations...")
             self._generate_visualizations(df)
             
-            insights = self._generate_insights(df, stats)
-            
-            if time.time() - start_time < self.config.time_limit:
-                narrative = self._generate_narrative(df, stats, insights)
-                if narrative:
-                    self._generate_readme(narrative)
+            if time.time() - start_time < self.config.time_limit - 30:
+                print("Generating insights...")
+                insights = self._generate_insights(df, stats)
+                
+                if time.time() - start_time < self.config.time_limit - 15:
+                    print("Generating narrative...")
+                    narrative = self._generate_narrative(df, stats, insights)
+                    if narrative:
+                        self._generate_readme(narrative)
+                else:
+                    print("Skipping narrative generation due to time constraint")
             else:
-                print("Time limit reached, skipping narrative generation")
+                print("Skipping insights and narrative generation due to time constraint")
                 
         except Exception as e:
             print(f"Analysis failed: {str(e)}")
             traceback.print_exc()
 
     def _create_output_directory(self):
+        """Create output directory"""
         if self.config.output_dir.exists():
             shutil.rmtree(self.config.output_dir)
         self.config.output_dir.mkdir(parents=True)
 
     def _load_and_validate_dataset(self, file_path: str) -> pd.DataFrame:
+        """Load and validate dataset"""
         path = Path(file_path)
         if not path.exists() or not path.is_file() or path.suffix.lower() != '.csv':
             raise ValueError(f"Invalid file path: {file_path}")
@@ -326,50 +280,38 @@ class DataAnalyzer:
         return df
 
     def _generate_visualizations(self, df: pd.DataFrame):
-        for i, strategy in enumerate(self.visualization_strategies):
+        """Generate visualizations"""
+        for i, strategy in enumerate(self.visualization_strategies, 1):
+            print(f"Generating visualization {i}/{len(self.visualization_strategies)}...")
             viz_path = self.config.output_dir / f'visualization_{i}.png'
-            strategy.create_visualization(df, viz_path, f"Analysis {i+1}")
+            strategy.create_visualization(df, viz_path, f"Analysis {i}")
             self.plots.append(viz_path.name)
 
     def _generate_insights(self, df: pd.DataFrame, stats: Dict[str, Any]) -> str:
+        """Generate insights"""
         prompt = f"""
-        Analyze this dataset based on the following information:
-
-        1. Dataset Statistics:
-        {stats['basic_stats']['summary'].to_string()}
-
-        2. Advanced Analysis:
-        {json.dumps(stats, indent=2, default=str)}
-
-        Please provide:
-        1. Key patterns and trends
-        2. Statistical findings
-        3. Notable relationships between variables
-        4. Distribution insights
-        5. Recommendations
-
-        Format with clear headers and bullet points.
+        Analyze this dataset:
+        Rows: {df.shape[0]}
+        Columns: {df.shape[1]}
+        
+        Key findings:
+        {json.dumps(stats.get('basic_stats', {}), indent=2, default=str)[:500]}
+        
+        Provide key insights in bullet points.
         """
 
         messages = [
-            {"role": "system", "content": "You are a data analyst specializing in statistical analysis."},
+            {"role": "system", "content": "You are a data analyst. Be concise."},
             {"role": "user", "content": prompt}
         ]
 
-        insights = self.api_client.make_request(messages)
-        if insights:
-            print("\nKey Insights Generated")
-            return insights
-        return ""
+        return self.api_client.make_request(messages) or "No insights generated"
 
-    def _generate_narrative(self, df: pd.DataFrame, stats: Dict[str, Any], insights: str) -> str:
-        subject = self._determine_subject(df)
-        
+    def _generate_narrative(self, df: pd.DataFrame, stats: Dict[str, Any], 
+                          insights: str) -> str:
+        """Generate narrative"""
         story_prompt = f"""
-        Create an engaging narrative about this {subject} dataset:
-
-        Key Statistics:
-        {stats['basic_stats']['summary'].to_string()}
+        Create an engaging narrative/ story about this dataset make it like a movie / great novel :
 
         Insights:
         {insights}
@@ -387,29 +329,11 @@ class DataAnalyzer:
             {"role": "user", "content": story_prompt}
         ]
 
-        narrative = self.api_client.make_request(messages)
-        if narrative:
-            print("\nNarrative Generated")
-            return narrative
-        return ""
-
-    def _determine_subject(self, df: pd.DataFrame) -> str:
-        columns_str = ' '.join(df.columns.str.lower())
-        common_subjects = {
-            'book': ['book', 'author', 'title', 'publisher'],
-            'movie': ['movie', 'film', 'director', 'actor'],
-            'sales': ['sale', 'revenue', 'product', 'customer'],
-            'financial': ['price', 'cost', 'revenue', 'profit']
-        }
-        
-        for subject, keywords in common_subjects.items():
-            if any(keyword in columns_str for keyword in keywords):
-                return subject
-                
-        return "dataset"
+        return self.api_client.make_request(messages) or "No narrative generated"
 
     def _generate_readme(self, narrative: str):
-        readme_content = "# Data Analysis Narrative\n\n"
+        """Generate README file"""
+        readme_content = "# Data Analysis Report\n\n"
         readme_content += narrative + "\n\n"
         
         readme_content += "## Visualizations\n\n"
@@ -419,7 +343,7 @@ class DataAnalyzer:
         readme_path = self.config.output_dir / 'README.md'
         with open(readme_path, 'w', encoding='utf-8') as f:
             f.write(readme_content)
-        print(f"\nREADME.md generated at: {readme_path}")
+        print(f"\nAnalysis report generated at: {readme_path}")
 
 def main():
     """Main execution function"""
