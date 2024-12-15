@@ -14,7 +14,7 @@
 # ]
 # ///
 
-import chardet
+iimport chardet
 import base64
 from dotenv import load_dotenv
 import warnings
