@@ -51,11 +51,13 @@ class LLMAnalyzer:
         self.output_dir = output_dir  # Store output directory path
 
     def _save_and_close_plot(self, title: str):
-        """Save the current plot to a file and close it."""
+        """Save the current plot to a file and close it with proper labeling."""
         self.figure_counter += 1
         filename = f'plot_{self.figure_counter}.png'
         filepath = self.output_dir / filename
         plt.title(title)
+        plt.xlabel("X-axis Label")  # Add appropriate labels
+        plt.ylabel("Y-axis Label")  # Add appropriate labels
         plt.savefig(filepath)
         self.plots.append(filename)  # Store just the filename for README references
         print(f"Plot saved as: {filepath}")
@@ -165,134 +167,19 @@ class LLMAnalyzer:
 
         return False
 
-
     def analyze_dataset(self, file_path: str):
         """Main method to analyze the dataset."""
         try:
-            # Create output directory if it doesn't exist
-            if not self.output_dir.exists():
-                self.output_dir.mkdir(parents=True)
-
-            # Validate file path
-            path = Path(file_path)
-            if not path.exists():
-                raise FileNotFoundError(f"The file '{file_path}' does not exist.")
-            if not path.is_file():
-                raise ValueError(f"'{file_path}' is not a file.")
-            if path.suffix.lower() != '.csv':
-                raise ValueError(f"'{file_path}' is not a CSV file.")
-
-            print(f"Loading dataset from: {file_path}")
-
-            # Load and validate dataset with error handling for encoding
-            try:
-                b = 'utf-8' 
-                df = pd.read_csv(file_path, encoding=b)  # Try UTF-8 first
-            except UnicodeDecodeError:
-                print("UTF-8 decoding failed, trying ISO-8859-1 encoding...")
-                b = 'ISO-8859-1'
-                df = pd.read_csv(file_path, encoding=b)  # Fallback to ISO-8859-1
-            except pd.errors.EmptyDataError:
-                raise ValueError("The CSV file is empty.")
-            except pd.errors.ParserError:
-                raise ValueError("Error parsing the CSV file. Please ensure it's properly formatted.")
-
-            if df.empty:
-                raise ValueError("Dataset is empty")
-
+            self._create_output_directory()
+            df = self._load_and_validate_dataset(file_path)
             print(f"Successfully loaded dataset with shape: {df.shape}")
 
             # Generate initial data description
-            data_description = (
-                f"Dataset Overview:\n"
-                    f"Columns: {df.columns.tolist()}\n"
-                    f"Shape: {df.shape}\n"
-                    f"Sample data:\n{df.head(3).to_string()}\n"
-                    f"Data types:\n{df.dtypes.to_string()}"
-            )
-
+            data_description = self._generate_data_description(df)
             print("\nGenerating analysis...")
 
             # Get initial analysis suggestions
-            initial_prompt = f"""
-            Given this dataset description:
-            {data_description}
-            Dataset Path: {file_path}
-            
-
-            As an expert data scientist, create a comprehensive exploratory data analysis (EDA) script with the following strict requirements:
-
-            DATA ANALYSIS OBJECTIVES:
-            - Perform a COMPLETE and EXHAUSTIVE analysis of the entire dataset
-            - DO NOT sample or limit analysis to a subset of data
-            - Analyze ALL rows and columns without truncation
-
-            TECHNICAL REQUIREMENTS:
-            1. Data Loading:
-               - Use pandas to load the entire dataset
-               - Verify total number of rows and columns
-               - Print full dataset dimensions
-
-            2. Comprehensive Visualization Strategy:
-               - Create visualizations that represent FULL dataset characteristics
-               - Use subplots to maximize information density
-               - Implement scrollable or zoomable plots for large datasets
-               - Use techniques like:
-                 * Boxplots with all data points
-                 * Violin plots showing full distribution
-                 * Scatter plots with transparency for overlapping points
-                 * Correlation heatmaps using entire dataset
-
-            3. Statistical Analysis:
-               - Compute descriptive statistics for ALL numerical columns
-               - Generate distribution analysis for categorical variables
-               - Perform correlation analysis across entire dataset
-               - Detect and handle outliers using full dataset context
-
-            4. Error Handling:
-               - Implement robust error checking
-               - Handle missing values comprehensively
-               - Provide detailed data quality report
-               - Use appropriate imputation or filtering techniques
-
-            5. Performance Considerations:
-               - Use efficient pandas/numpy operations
-               - Implement memory-efficient plotting
-               - Consider using sampling for extremely large datasets only if absolutely necessary
-
-            6. Visualization Best Practices:
-               - Use plt.figure(figsize=()) for readable plots
-               - Add clear, informative titles and labels
-               - Use color palettes that enhance data readability
-               - Ensure plots are publication-quality
-               - there must be plots 
-
-            ADDITIONAL CONSTRAINTS:
-            - Code must be generic and adaptable to different datasets
-            - Include comprehensive comments explaining analysis approach
-            - Generate insights that go beyond surface-level observations
-
-            Provide a complete, production-ready Python script that meets these rigorous data exploration requirements.
-
-
-
-            """
-
-            messages = [
-                {"role": "system", "content": "You are a data scientist specialized in exploratory data analysis."},
-                {"role": "user", "content": initial_prompt}
-            ]
-
-            # Get and execute initial analysis
-            analysis_content = self._make_llm_request(messages)
-            if analysis_content:
-                code_blocks = self._extract_code_blocks(analysis_content)
-                for code in code_blocks:
-                    success, error_msg = self._execute_code_safely(code, df)
-                    if not success:
-                        print(f"Initial code execution failed. Attempting to fix...")
-                        if not self._fix_code_recursively(code, error_msg, df):
-                            print("Failed to fix code after maximum attempts")
+            self._generate_initial_analysis(data_description, file_path, df)
 
             # Generate final insights
             insights = self._generate_final_insights(df)
@@ -309,13 +196,87 @@ class LLMAnalyzer:
             print(f"Analysis failed: {str(e)}")
             traceback.print_exc()
 
-    def _generate_final_insights(self, df: pd.DataFrame):
-        """Generate final insights after analysis."""
-        subject = self._determine_subject(df)
-        # Create a summary of the numerical analysis
-        numerical_summary = df.describe().to_string()
+    def _create_output_directory(self):
+        """Create output directory if it doesn't exist."""
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
 
-        # Create a summary of missing values
+    def _load_and_validate_dataset(self, file_path: str) -> pd.DataFrame:
+        """Load and validate the dataset from the given file path."""
+        # Validate file path
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"The file '{file_path}' does not exist.")
+        if not path.is_file():
+            raise ValueError(f"'{file_path}' is not a file.")
+        if path.suffix.lower() != '.csv':
+            raise ValueError(f"'{file_path}' is not a CSV file.")
+
+        print(f"Loading dataset from: {file_path}")
+
+        # Load and validate dataset with error handling for encoding
+        try:
+            b = 'utf-8' 
+            df = pd.read_csv(file_path, encoding=b)  # Try UTF-8 first
+        except UnicodeDecodeError:
+            print("UTF-8 decoding failed, trying ISO-8859-1 encoding...")
+            b = 'ISO-8859-1'
+            df = pd.read_csv(file_path, encoding=b)  # Fallback to ISO-8859-1
+        except pd.errors.EmptyDataError:
+            raise ValueError("The CSV file is empty.")
+        except pd.errors.ParserError:
+            raise ValueError("Error parsing the CSV file. Please ensure it's properly formatted.")
+
+        if df.empty:
+            raise ValueError("Dataset is empty")
+
+        return df
+
+    def _generate_data_description(self, df: pd.DataFrame) -> str:
+        """Generate a description of the dataset."""
+        return (
+            f"Dataset Overview:\n"
+            f"Columns: {df.columns.tolist()}\n"
+            f"Shape: {df.shape}\n"
+            f"Sample data:\n{df.head(3).to_string()}\n"
+            f"Data types:\n{df.dtypes.to_string()}"
+        )
+
+    def _generate_initial_analysis(self, data_description: str, file_path: str, df: pd.DataFrame):
+        """Generate initial analysis suggestions based on the dataset description."""
+        initial_prompt = f"""
+        Given this dataset description:
+        {data_description}
+        Dataset Path: {file_path}
+        
+        As an expert data scientist, create a comprehensive exploratory data analysis (EDA) script with the following strict requirements:
+        
+        - Perform a COMPLETE and EXHAUSTIVE analysis of the entire dataset
+        - Use specific statistical methods to analyze correlations and trends
+        - Ensure visualizations are clear, well-labeled, and relevant to the analysis
+        - Include a methodology section for reproducibility
+        """
+
+        messages = [
+            {"role": "system", "content": "You are a data scientist specialized in exploratory data analysis."},
+            {"role": "user", "content": initial_prompt}
+        ]
+
+        # Get and execute initial analysis
+        analysis_content = self._make_llm_request(messages)
+        if analysis_content:
+            code_blocks = self._extract_code_blocks(analysis_content)
+            for code in code_blocks:
+                success, error_msg = self._execute_code_safely(code, df)
+                if not success:
+                    print(f"Initial code execution failed. Attempting to fix...")
+                    if not self._fix_code_recursively(code, error_msg, df):
+                        print("Failed to fix code after maximum attempts")
+
+    def _generate_final_insights(self, df: pd.DataFrame):
+        """Generate final insights after analysis with clear statistical methods."""
+        subject = self._determine_subject(df)
+        numerical_summary = df.describe().to_string()
         missing_values = df.isnull().sum().to_string()
 
         insight_prompt = f"""
@@ -382,7 +343,7 @@ class LLMAnalyzer:
         TUG ON EMOTIONS 
         ADD DRAMA ADD LOVE ADD THRILL ADD HERO ENTRY AND COOL SHIT LIKE THAT 
         THE STORY MUST BE VERY MEMORABLE AND MUST APPEASE INDIAN AUDIENCE BUT YOU CAN MAKE THE STORY NON INDIAN TOO IF NEEDED.
-        USE VIVID IMAGERY AND GIVE THE SETTING AN ANIME LIKE SERENITY I HSOULD BE AT PEACE READING IT . 
+        USE VIVID IMAGERY AND GIVE THE SETTING AN ANIME LIKE SERENITY I HSOULD BE AT PEACE READING IT. 
         TUG ON EMOTIONS .
         AGAIN THE FINAL INSIGHTS SECTION IS GODLIKE -- FOLLOW IT AND PRESENT AS MUCH INFO FROM THAT IN THE STORY AS POSSIBLE
 
