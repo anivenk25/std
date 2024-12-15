@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.8"
-#dependencies = [
+# dependencies = [
 #   "requests>=2.28.0",
 #    "pandas>=1.5.0",
 #    "matplotlib>=3.5.0",
@@ -9,7 +9,7 @@
 #    "rich>=12.0.0",
 #    "scipy>=1.9.0",
 #    "scikit-learn>=1.0.0",
-#]
+# ]
 # description = "A script for data analysis and visualization."
 # entry-point = "autolysis.py"
 # ///
