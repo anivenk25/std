@@ -14,660 +14,391 @@
 # entry-point = "autolysis.py"
 # ///
 
+
+# Required libraries are given in meta data as requires and dependencies. So no need to install each time in pip command
+
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#   "chardet>=5.2.0",
+#   "matplotlib>=3.9.3",
+#   "numpy>=2.2.0",
+#   "openai>=1.57.2",
+#   "pandas>=2.2.3",
+#   "python-dotenv>=1.0.1",
+#   "requests>=2.32.3",
+#   "scikit-learn>=1.6.0",
+#   "seaborn>=0.13.2",
+# ]
+# ///
+
+import chardet
+import base64
+from dotenv import load_dotenv
+import warnings
 import os
-import requests
-import json
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  # Set backend before importing pyplot
-import matplotlib.pyplot as plt
 import seaborn as sns
-import numpy as np
-import traceback
-import re
-from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
-import sys
-import shutil
-from scipy import stats
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-import time
-from functools import wraps
+import matplotlib.pyplot as plt
+import requests
+from sklearn.ensemble import IsolationForest
+from sklearn.impute import SimpleImputer
+from sklearn.cluster import KMeans
+from functools import lru_cache
 
-def timeit(func):
-    """Decorator to measure execution time of functions."""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.time()
-        result = func(*args, **kwargs)
-        end = time.time()
-        print(f"{func.__name__} took {end - start:.2f} seconds")
-        return result
-    return wrapper
 
-@dataclass
-class AnalysisConfig:
-    """Configuration settings for analysis."""
-    max_retries: int = 3
-    confidence_threshold: float = 0.95
-    visualization_dpi: int = 300
-    token_limit: int = 4000
-    output_dir: Path = Path("output")
-    time_limit: int = 120  # Updated to 120 seconds
+"""
+ load_dotenv() used to load environment variables from a .env file into the environment.
+ To manage configuration settings, especially  to avoid hardcoding sensitive information (e.g., API keys, database credentials) directly in the code."""
 
-class APIClient:
-    """Handles API communication with LLM service."""
-    def __init__(self):
-        self.token = os.getenv("AIPROXY_TOKEN")
-        if not self.token:
-            raise EnvironmentError("AIPROXY_TOKEN is not set")
-        
-        self.proxy_url = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.token}",
-        }
+load_dotenv()
 
-    def make_request(self, messages: List[Dict[str, str]]) -> Optional[str]:
-        """Make API request with error handling."""
-        try:
-            data = {
-                "model": "gpt-4o-mini",
-                "messages": messages
-            }
-            response = requests.post(
-                self.proxy_url, 
-                headers=self.headers, 
-                json=data, 
-                timeout=30
-            )
-            response.raise_for_status()
-            return response.json()['choices'][0]['message']['content']
-        except Exception as e:
-            print(f"API request failed: {str(e)}")
-            return None
+# SET AIPROXY_TOKEN
+AIPROXY_TOKEN = os.getenv("AIPROXY_TOKEN")
 
-class StatisticalMethods:
-    """Collection of statistical analysis methods."""
-    
-    @staticmethod
-    def basic_stats(data: pd.DataFrame) -> Dict[str, Any]:
-        """Calculate basic statistics for the DataFrame."""
-        return {
-            'summary': data.describe(),
-            'missing': data.isnull().sum(),
-            'dtypes': data.dtypes
-        }
+if not AIPROXY_TOKEN:
+    raise ValueError("ERROR: AIPROXY_TOKEN environment variable is not set.")
 
-    @staticmethod
-    def normality_test(data: pd.Series) -> Dict[str, Any]:
-        """Perform a normality test on the data."""
-        if len(data) < 3:
-            return {'error': 'Insufficient data'}
-        statistic, p_value = stats.normaltest(data.dropna())
-        return {
-            'statistic': statistic,
-            'p_value': p_value,
-            'is_normal': p_value > 0.05
-        }
 
-    @staticmethod
-    def outlier_detection(data: pd.Series) -> Dict[str, Any]:
-        """Detect outliers in the data using IQR."""
-        Q1 = data.quantile(0.25)
-        Q3 = data.quantile(0.75)
-        IQR = Q3 - Q1
-        outliers = data[(data < (Q1 - 1.5 * IQR)) | (data > (Q3 + 1.5 * IQR))]
-        return {
-            'outlier_count': len(outliers),
-            'outlier_percentage': (len(outliers) / len(data)) * 100,
-            'outlier_values': outliers.tolist()
-        }
+API_URL = "http://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
 
-    @staticmethod
-    def dimension_reduction(data: pd.DataFrame, n_components: int = 2) -> Dict[str, Any]:
-        """Perform PCA for dimensionality reduction."""
-        scaler = StandardScaler()
-        scaled_data = scaler.fit_transform(data)
-        pca = PCA(n_components=n_components)
-        transformed = pca.fit_transform(scaled_data)
-        return {
-            'explained_variance_ratio': pca.explained_variance_ratio_.tolist(),
-            'cumulative_variance_ratio': np.cumsum(pca.explained_variance_ratio_).tolist(),
-            'components': transformed.tolist()
-        }
+"""@lru_cache: This decorator comes from the functools module. It automatically stores the results of function calls in a cache. The next time the function is called with the same arguments, the cached result is returned instead of recalculating it.
+maxsize=10: This parameter sets the maximum number of cached results to keep. Once the cache exceeds this size, the least recently used results are discarded. If you set maxsize=None, the cache size becomes unlimited, but with a specific value (like 10), the cache will only store 10 entries."""
 
-class VisualizationStrategy(ABC):
-    """Abstract base class for visualization strategies."""
-    @abstractmethod
-    def create_visualization(self, df: pd.DataFrame, fig_path: Path, title: str) -> None:
-        """Create a visualization and save it to a file."""
-        pass
+@lru_cache(maxsize=10)
 
-class CorrelationHeatmap(VisualizationStrategy):
-    def create_visualization(self, df: pd.DataFrame, fig_path: Path, title: str) -> None:
-        """Create a correlation heatmap."""
-        numeric_df = df.select_dtypes(include=[np.number])
-        plt.figure(figsize=(12, 8))
-        sns.heatmap(numeric_df.corr(), annot=True, cmap='coolwarm', center=0)
-        plt.title(f"Correlation Heatmap - {title}")
-        plt.tight_layout()
-        plt.savefig(fig_path, dpi=300)
-        plt.close()
 
-class DistributionPlot(VisualizationStrategy):
-    def create_visualization(self, df: pd.DataFrame, fig_path: Path, title: str) -> None:
-        """Create distribution plots for numeric columns."""
-        numeric_cols = df.select_dtypes(include=[np.number]).columns
-        n_cols = len(numeric_cols)
-        if n_cols == 0:
-            return
-            
-        plt.figure(figsize=(15, 5 * ((n_cols + 1) // 2)))
-        for i, col in enumerate(numeric_cols, 1):
-            plt.subplot(((n_cols + 1) // 2), 2, i)
-            sns.histplot(df[col], kde=True)
-            plt.title(f"Distribution of {col}")
-            plt.xlabel(col)
-            plt.ylabel("Frequency")
-        
-        plt.suptitle(f"Distribution Analysis - {title}")
-        plt.tight_layout()
-        plt.savefig(fig_path, dpi=300)
-        plt.close()
+def query_chat_completion(prompt, model="gpt-4o-mini"):
+    """Sending a chat prompt to the LLM and cache results to optimize API interactions."""
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AIPROXY_TOKEN}"
+    }
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json().get("choices", [{}])[0].get("message", {}).get("content", "No response content returned.")
+    except requests.RequestException as e:
+        raise Exception(f"Error during LLM query: {e}")
 
-class LLMAnalyzer:
-    """Class to analyze datasets using LLM for code generation and insights."""
-    def __init__(self):
-        self.token = os.getenv("AIPROXY_TOKEN")
-        if not self.token:
-            raise EnvironmentError("AIPROXY_TOKEN is not set. Please set it as an environment variable.")
 
-        self.proxy_url = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.token}",
-        }
-        self.figure_counter = 0
+def detect_file_encoding(filepath):
+    """chardet is a Python library used to detect the character encoding of text data.
+    Useful when you're working with files or data from sources where the encoding isn't specified, and we need to determine the correct encoding to properly read or write the data."""
+    #Detecting the encoding of a file.
+    with open(filepath, "rb") as file:
+        result = chardet.detect(file.read(100000))
+        return result["encoding"]
 
-    def _save_and_close_plot(self, title: str):
-        """Save the current plot to a file and close it."""
-        self.figure_counter += 1
-        filename = f'plot_{self.figure_counter}.png'
-        plt.title(title)
-        plt.savefig(filename)
-        print(f"Plot saved as: {filename}")
-        plt.close()
+def load_data(filename):
+    """Loading CSV data into a Pandas DataFrame, handling file encoding with fallbacks."""
+    try:
+        encoding = detect_file_encoding(filename)
+        print(f"Detected encoding for {filename}: {encoding}")
 
-    def _make_llm_request(self, messages: List[Dict[str, str]]) -> Optional[str]:
-        """Make a request to the LLM API with error handling."""
-        try:
-            data = {
-                "model": "gpt-4o-mini",
-                "messages": messages
-            }
-            response = requests.post(self.proxy_url, headers=self.headers, json=data, timeout=30)
-            response.raise_for_status()
-            return response.json()['choices'][0]['message']['content']
-        except requests.exceptions.RequestException as e:
-            print(f"API request failed: {str(e)}")
-            return None
-        except (KeyError, json.JSONDecodeError) as e:
-            print(f"Error parsing API response: {str(e)}")
-            return None
+        return pd.read_csv(filename, encoding=encoding)
+    except Exception as primary_error:
+        print(f"Primary encoding {encoding} failed: {primary_error}")
 
-    def _extract_code_blocks(self, content: str) -> List[str]:
-        """Extract Python code blocks from markdown-formatted text."""
-        code_blocks = re.findall(r'```python\n(.*?)\n```', content, re.DOTALL)
-        return code_blocks if code_blocks else []
-
-    def _execute_code_safely(self, code: str, df: pd.DataFrame) -> Tuple[bool, Optional[str]]:
-        """Execute code with safety measures and return success status and error message."""
-        try:
-            # Ensure the code uses the provided DataFrame
-            if 'pd.read_csv' in code:
-                raise ValueError("Code should not read from CSV files directly. Use the provided DataFrame 'df'.")
-
-            # Modify the code to save plots instead of showing them
-            code = code.replace('plt.show()', 'self._save_and_close_plot("Generated Plot")')
-
-            # Create a restricted locals dictionary with only necessary objects
-            local_dict = {
-                'pd': pd, 
-                'plt': plt, 
-                'sns': sns, 
-                'df': df, 
-                'analyzer': self
-            }
-
-            # Execute the code in the restricted environment
-            exec(code, {'__builtins__': __builtins__}, local_dict)
-
-            return True, None
-        except Exception as e:
-            error_msg = f"Error: {str(e)}\nTraceback:\n{traceback.format_exc()}"
-            return False, error_msg
-
-    def _fix_code_recursively(self, code: str, error_msg: str, df: pd.DataFrame, max_attempts: int = 3) -> bool:
-        """Recursively try to fix code using LLM until it works or max attempts reached."""
-        attempt = 0
-        while attempt < max_attempts:
-            fix_prompt = f"""
-            The following Python code generated an error:
-            ```python
-            {code}
-            ```
-
-            Error message:
-            {error_msg}
-
-            Please provide a fixed version of the code that:
-            1. Handles the error properly
-            2. Uses only pandas, matplotlib.pyplot, and seaborn
-            3. Works with the DataFrame that has these columns: {df.columns.tolist()}
-            4. Includes proper error handling
-            5. Uses plt.figure() before creating each plot
-            6. Uses plt.show() after each plot is complete
-            7. Does not reference any specific CSV files
-
-            Provide ONLY the corrected code block, no explanations.
-            """
-
-            messages = [
-                {"role": "system", "content": "You are a Python expert focused on data analysis and visualization."},
-                {"role": "user", "content": fix_prompt}
-            ]
-
-            fixed_content = self._make_llm_request(messages)
-            if not fixed_content:
-                return False
-
-            fixed_code_blocks = self._extract_code_blocks(fixed_content)
-            if not fixed_code_blocks:
-                fixed_code = fixed_content  # If no code blocks found, try using the entire response
-            else:
-                fixed_code = fixed_code_blocks[0]
-
-            success, new_error = self._execute_code_safely(fixed_code, df)
-            if success:
-                return True
-
-            error_msg = new_error
-            attempt += 1
-
-        return False
-
-    def analyze_dataset(self, file_path: str):
-        """Main method to analyze the dataset."""
-        try:
-            # Validate file path
-            path = Path(file_path)
-            if not path.exists():
-                raise FileNotFoundError(f"The file '{file_path}' does not exist.")
-            if not path.is_file():
-                raise ValueError(f"'{file_path}' is not a file.")
-            if path.suffix.lower() != '.csv':
-                raise ValueError(f"'{file_path}' is not a CSV file.")
-
-            print(f"Loading dataset from: {file_path}")
-
-            # Load and validate dataset with error handling for encoding
+        fallback_encodings = ["utf-8-sig", "latin1"]
+        for fallback in fallback_encodings:
             try:
-                df = pd.read_csv(file_path, encoding='utf-8')  # Try UTF-8 first
-            except UnicodeDecodeError:
-                print("UTF-8 decoding failed, trying ISO-8859-1 encoding...")
-                df = pd.read_csv(file_path, encoding='ISO-8859-1')  # Fallback to ISO-8859-1
-            except pd.errors.EmptyDataError:
-                raise ValueError("The CSV file is empty.")
-            except pd.errors.ParserError:
-                raise ValueError("Error parsing the CSV file. Please ensure it's properly formatted.")
+                print(f"Trying fallback encoding: {fallback}")
+                return pd.read_csv(filename, encoding=fallback)
+            except Exception as fallback_error:
+                print(f"Fallback encoding {fallback} failed: {fallback_error}")
 
-            if df.empty:
-                raise ValueError("Dataset is empty")
+        raise ValueError(f"Could not to load file {filename} with any encoding.")
 
-            print(f"Successfully loaded dataset with shape: {df.shape}")
+""" CREATE OUTPUT FOLDER"""
+def create_output_folder(filename):
+    print("Output folder is created")
+    folder_name = os.path.splitext(os.path.basename(filename))[0]
+    if not os.path.exists(folder_name):
+        os.makedirs(folder_name)
+    return folder_name
 
-            
-            # Get initial analysis suggestions
-            data_description = (
-                f"Dataset Overview:\n"
-                f"Columns: {df.columns.tolist()}\n"
-                f"Shape: {df.shape}\n"
-                f"Sample data:\n{df.head(3).to_string()}\n"
-                f"Data types:\n{df.dtypes.to_string()}"
-            )
+#GENERAL ANALYSIS LIKE MISSING VALUES,
+def generic_analysis_data(df):
+    print("Calling genereic analysis")
+    """Performing generic analysis on the dataset."""
+    analysis = {
+        "shape": df.shape,
+        "columns": df.columns.tolist(),
+        "dtypes": df.dtypes.to_dict(),
+        "missing_values": df.isnull().sum().to_dict(),
+        "summary_stats": df.describe(include="all").to_dict(),
+        "variance": df.var(numeric_only=True).to_dict(),
+        "skewness": df.skew(numeric_only=True).to_dict()
+    }
+    return analysis
 
-            initial_prompt = f"""
-            Given this dataset description:
-            {data_description}
+def preprocessing_data(df):
+    print("Preprocessing data")
+    """Preprocess data to handle missing values."""
+    numeric_df = df.select_dtypes(include=['float', 'int'])
+    imputer = SimpleImputer(strategy='mean')
+    numeric_df_imputed = pd.DataFrame(imputer.fit_transform(numeric_df), columns=numeric_df.columns)
+    return numeric_df_imputed
 
-            Generate Python code that:
-            1. Creates meaningful visualizations using matplotlib and seaborn
-            2. Calculates relevant summary statistics
-            3. Identifies key patterns or relationships
-            4. Handles potential errors (missing values, invalid data)
-            5. Uses plt.figure() before creating each plot
-            6. Uses plt.show() after each plot is complete
-            7. Does not reference any specific CSV files
+def preprocess_for_visualization(df, max_rows=1000):
+    print("Getting ready for visualizations")
+    """Limiting the dataset to a subset for faster visualizations."""
+    if df.shape[0] > max_rows:
+        return df.sample(max_rows, random_state=42)
+    return df
 
-            Provide the code in a Python code block.
-            """
+def detecting_features(df):
+    print("Detecting features")
+    """Detect the feature types for special analyses."""
+    return {
+        "time_series": df.select_dtypes(include=['datetime']).columns.tolist(),
+        "geographic": [col for col in df.columns if any(geo in col.lower() for geo in ["latitude", "longitude", "region", "country"])],
+        "network": [col for col in df.columns if "source" in col.lower() or "target" in col.lower()],
+        "cluster": df.select_dtypes(include=['float', 'int']).columns.tolist()
+    }
 
-            messages = [
-                {"role": "system", "content": "You are a data scientist specialized in exploratory data analysis."},
-                {"role": "user", "content": initial_prompt}
-            ]
+def perform_specific_analyses(df, feature_types):
+    """Perform specfic analyses based on feature types."""
+    print("Performing specific analysis")
+    analyses = {}
 
-            # Get and execute initial analysis
-            analysis_content = self._make_llm_request(messages)
-            if analysis_content:
-                code_blocks = self._extract_code_blocks(analysis_content)
-                for code in code_blocks:
-                    success, error_msg = self._execute_code_safely(code, df)
-                    if not success:
-                        print(f"Initial code execution failed. Attempting to fix...")
-                        if not self._fix_code_recursively(code, error_msg, df):
-                            print("Failed to fix code after maximum attempts")
-
-            # Generate final insights
-            insights = self._generate_final_insights(df)
-
-            # Generate the epic story
-            print("\nGenerating the epic story...")
-            self._generate_epic_story(df, insights)
-
-        except Exception as e:
-            print(f"Analysis failed: {str(e)}")
-            traceback.print_exc()
-
-    def _generate_final_insights(self, df: pd.DataFrame):
-        """Generate final insights after analysis."""
-        # Create a summary of the numerical analysis
-        numerical_summary = df.describe().to_string()
-
-        # Create a summary of missing values
-        missing_values = df.isnull().sum().to_string()
-
-        insight_prompt = f"""
-        Analyze this dataset based on the following information:
-
-        1. Dataset Statistics:
-        {numerical_summary}
-
-        2. Missing Values Analysis:
-        {missing_values}
-
-        3. Generated Visualizations:
-        - {self.figure_counter} plots were generated analyzing different aspects of the data
-
-        Please provide:
-        1. Key patterns and trends from the data
-        2. Important statistical findings
-        3. Notable relationships between variables
-        4. Insights about the distribution of ratings
-        5. Any interesting observations about the dataset and their characteristics
-        6. Recommendations for stakeholders
-
-        Format the response with clear headers and bullet points.
-        """
-
-        messages = [
-            {"role": "system", "content": "You are a data analyst specializing in dataset analysis."},
-            {"role": "user", "content": insight_prompt}
+    if feature_types["time_series"]:
+        analyses["time_series"] = [
+            f"Time-series features detected: {', '.join(feature_types['time_series'])}. "
+            "These can be used to observe trends or forecast future patterns."
         ]
+    else:
+        analyses["time_series"] = ["No time-series features detected."]
 
-        insights = self._make_llm_request(messages)
-        if insights:
-            print("\nKey Insights:")
-            print(insights)
-            return str(insights)
-
-    def _generate_epic_story(self, df: pd.DataFrame, insights: str):
-        """Generate an epic narrative based on the data analysis."""
-        # Create summaries for context
-        numerical_summary = df.describe().to_string()
-        missing_values = df.isnull().sum().to_string()
-        
-        # Automatically determine the subject and genre
-        subject = self._determine_subject(df)
-        genre = self._determine_genre(df)
-        
-        story_prompt = f"""
-        In the vibrant world of data, where every number tells a story and every insight sparks a connection, you are the beloved storyteller, a modern bard navigating the complexities of {subject} through this dataset.
-
-        - {df.shape} data points each representing a unique journey of {subject}.
-        - {df.columns.tolist()}, each column a chapter in the saga of {subject}.
-        -  {df.head(3).to_string()}, where the first sparks of {subject} intertwine.
-
-        - {missing_values}, like unspoken words in a love letter, leaving gaps in the narrative that yearn to be filled with understanding.
-
-        - {self.figure_counter} enchanting illustrations conjured from the depths of analysis, each revealing a facet of {subject}.
-
-        **Final Insights:**
-        - {insights}  
-        Craft a heartwarming narrative that unfolds like a contemporary {genre}, filled with emotional growth and profound insights (IMPORTANT : REFER AND USE THE FINAL INSIGHTS SECTION THROUGHT THE STORY AND MAKE SURE THAT THE STORY IS CONSISTENT WITH THEM also for every claim made weave in the numbers too also make the process of coming to every conclusion sumer dramatic)
-
-        MAKE THE PROCESS OF ARRIVING TO THESE CONCLUSIONS VERY GRIPPING AND UNIQUE 
-
-        TUG ON EMOTIONS 
-
-        ADD DRAMA ADD LOVE ADD THRILL ADD HERO ENTRY AND COOL SHIT LIKE THAT 
-
-        THE STORY MUST BE VERY MEMEORABLE AND MUST APPEASE INDIAN AUDIENCE BUT YOU CAN MAKE THE STORY NON INDIAN TOO IF NEEDED.
-
-        AGAIN THE FINAL INSIGHTS SECTION IS GODLIKE -- FOLLOW IT AND PRESENT AS MUCH INFO FROM THAT IN THE STORY AS POSSIBLE
-
-        USE {insights}
-        """
-
-        messages = [
-            {"role": "system", "content": "You are an immortal storyteller who transforms data into legendary tales."},
-            {"role": "user", "content": story_prompt}
+    if len(feature_types["geographic"]) >= 2:
+        analyses["geographic"] = [
+            f"Geographic features detected: {', '.join(feature_types['geographic'][:2])}. "
+            "These can be used to visualize or analyze spatial distributions."
         ]
-        
-        story = self._make_llm_request(messages)
-        if story:
-            print("\n" + "="*50)
-            print("The Legend of the Literary Realms")
-            print("="*50 + "\n")
-            print(story)
+    else:
+        analyses["geographic"] = ["No geographic features detected."]
 
-    def _determine_subject(self, df: pd.DataFrame) -> str:
-        """Determine the subject of the dataset based on its content."""
-        # Example heuristic: use the most common word in the first few rows of the DataFrame
-        text_data = ' '.join(df.astype(str).values.flatten())
-        words = re.findall(r'\w+', text_data.lower())
-        most_common_word = pd.Series(words).value_counts().idxmax()
-        return most_common_word.capitalize()
-
-    def _determine_genre(self, df: pd.DataFrame) -> str:
-        """Determine the genre of the dataset based on its content."""
-        # Example heuristic: analyze column names for genre-related keywords
-        genre_keywords = ['rating', 'review', 'score', 'feedback', 'sentiment']
-        for column in df.columns:
-            if any(keyword in column.lower() for keyword in genre_keywords):
-                return "Analysis of Ratings"  # Example genre
-        return "Various Themes"  # Default genre if no keywords found
-
-class DataAnalyzer:
-    """Enhanced data analyzer with comprehensive analysis capabilities."""
-    def __init__(self, config: AnalysisConfig):
-        self.config = config
-        self.api_client = APIClient()
-        self.stats_analyzer = StatisticalMethods()
-        self.llm_analyzer = LLMAnalyzer()  # Integrate LLMAnalyzer
-        self.visualization_strategies = [
-            CorrelationHeatmap(),
-            DistributionPlot()
+    if len(feature_types["network"]) >= 2:
+        analyses["network"] = [
+            f"Network relationships detected between {feature_types['network'][0]} and {feature_types['network'][1]}. "
+            "These can be analyzed for connectivity or collaborations."
         ]
-        self.plots: List[str] = []
-        
-    @timeit
-    def analyze_dataset(self, file_path: str):
-        """Main method to analyze the dataset."""
-        try:
-            start_time = time.time()
-            self._create_output_directory()
-            df = self._load_and_validate_dataset(file_path)
-            print(f"Successfully loaded dataset with shape: {df.shape}")
+    else:
+        analyses["network"] = ["No network features detected."]
 
-            # Perform statistical analysis and generate visualizations
-            stats = self.stats_analyzer.basic_stats(df)
-            self._generate_visualizations(df)
-
-            # Use LLMAnalyzer for analysis
-            self.llm_analyzer.analyze_dataset(file_path)
-
-            insights = self._generate_insights(df, stats)
-            
-            if time.time() - start_time < self.config.time_limit:
-                narrative = self._generate_narrative(df, stats, insights)
-                if narrative:
-                    self._generate_readme(narrative)
-            else:
-                print("Time limit reached, skipping narrative generation")
-                
-        except Exception as e:
-            print(f"Analysis failed: {str(e)}")
-            traceback.print_exc()
-
-    def _create_output_directory(self):
-        """Create output directory for saving results."""
-        if self.config.output_dir.exists():
-            shutil.rmtree(self.config.output_dir)
-        self.config.output_dir.mkdir(parents=True)
-
-    def _load_and_validate_dataset(self, file_path: str) -> pd.DataFrame:
-        """Load and validate the dataset from the given file path."""
-        path = Path(file_path)
-        if not path.exists() or not path.is_file() or path.suffix.lower() != '.csv':
-            raise ValueError(f"Invalid file path: {file_path}")
-            
-        try:
-            df = pd.read_csv(file_path, encoding='utf-8')
-        except UnicodeDecodeError:
-            df = pd.read_csv(file_path, encoding='ISO-8859-1')
-            
-        if df.empty:
-            raise ValueError("Dataset is empty")
-            
-        return df
-
-    def _generate_visualizations(self, df: pd.DataFrame):
-        """Generate visualizations for the dataset."""
-        for i, strategy in enumerate(self.visualization_strategies):
-            viz_path = self.config.output_dir / f'visualization_{i}.png'
-            strategy.create_visualization(df, viz_path, f"Analysis {i+1}")
-            self.plots.append(viz_path.name)
-
-    def _generate_insights(self, df: pd.DataFrame, stats: Dict[str, Any]) -> str:
-        """Generate insights based on the dataset and statistical analysis."""
-        prompt = f"""
-        Analyze this dataset based on the following information:
-
-        1. Dataset Statistics:
-        {stats['summary'].to_string()}
-
-        2. Advanced Analysis:
-        {json.dumps(stats, indent=2, default=str)}
-
-        Please provide:
-        1. Key patterns and trends
-        2. Statistical findings
-        3. Notable relationships between variables
-        4. Distribution insights
-        5. Recommendations
-
-        Format with clear headers and bullet points.
-        """
-
-        messages = [
-            {"role": "system", "content": "You are a data analyst specializing in statistical analysis."},
-            {"role": "user", "content": prompt}
+    if len(feature_types["cluster"]) > 1:
+        analyses["cluster"] = [
+            "Cluster analysis is feasible with the available numeric features. "
+            "This could help identify natural groupings in the data."
         ]
+    else:
+        analyses["cluster"] = ["Not enough numeric features for cluster analysis."]
 
-        insights = self.api_client.make_request(messages)
-        if insights:
-            print("\nKey Insights Generated")
-            return insights
-        return ""
+    return analyses
 
-    def _generate_narrative(self, df: pd.DataFrame, stats: Dict[str, Any], insights: str) -> str:
-        """Generate a narrative based on the dataset analysis."""
-        subject = self._determine_subject(df)
-        
-        story_prompt = f"""
-        Create an engaging narrative about this {subject} dataset:
+def advanced_analysis(df):
+    """Performing advanced statistical and exploratory data analysis."""
+    print("Performing advanced statistical analysiis")
+    analysis = {}
 
-        Key Statistics:
-        {stats['summary'].to_string()}
+    correlation_matrix = df.corr()
+    high_corr_pairs = correlation_matrix.abs().unstack().sort_values(ascending=False)
+    significant_corr = high_corr_pairs[high_corr_pairs > 0.7].drop_duplicates()
+    analysis["significant_correlations"] = significant_corr.to_dict()
 
-        Insights:
-        {insights}
+    categorical_cols = df.select_dtypes(include=['object']).columns
+    if len(categorical_cols) > 1:
+        from scipy.stats import chi2_contingency
+        chi_results = {}
+        for i in range(len(categorical_cols)):
+            for j in range(i + 1, len(categorical_cols)):
+                contingency_table = pd.crosstab(df[categorical_cols[i]], df[categorical_cols[j]])
+                chi2, p, _, _ = chi2_contingency(contingency_table)
+                chi_results[f"{categorical_cols[i]} vs {categorical_cols[j]}"] = {"chi2": chi2, "p_value": p}
+        analysis["chi_square_tests"] = chi_results
 
-        Requirements:
-        1. Create a compelling story that explains the data journey
-        2. Include specific numbers and findings
-        3. Make it engaging and memorable
-        4. Include implications and recommendations
-        5. Use clear sections and structure
-        """
+    if len(df.select_dtypes(include=['float', 'int']).columns) > 1:
+        kmeans = KMeans(n_clusters=3, random_state=42).fit(df.select_dtypes(include=['float', 'int']))
+        analysis["kmeans_clusters"] = pd.Series(kmeans.labels_).value_counts().to_dict()
 
-        messages = [
-            {"role": "system", "content": "You are a data storyteller who transforms analysis into engaging narratives."},
-            {"role": "user", "content": story_prompt}
-        ]
+    return analysis
 
-        narrative = self.api_client.make_request(messages)
-        if narrative:
-            print("\nNarrative Generated")
-            return narrative
-        return ""
+def generate_prompt(data_summary, feature_types):
+    """Generating dynamic prompts based on dataset properties."""
+    print("Genrating prompt")
+    if len(data_summary["columns"]) > 50:
+        return "The dataset has many columns. Focus on identifying the most critical features and summarizing insights concisely."
+    elif "time_series" in feature_types and feature_types["time_series"]:
+        return "The dataset contains time-series data. Provide detailed temporal trends and predictions."
+    else:
+        return "Analyze the dataset comprehensively and highlight correlations, distributions, and any anomalies."
 
-    def _determine_subject(self, df: pd.DataFrame) -> str:
-        """Determine the subject of the dataset based on its content."""
-        columns_str = ' '.join(df.columns.str.lower())
-        common_subjects = {
-            'book': ['book', 'author', 'title', 'publisher'],
-            'movie': ['movie', 'film', 'director', 'actor'],
-            'sales': ['sale', 'revenue', 'product', 'customer'],
-            'financial': ['price', 'cost', 'revenue', 'profit']
-        }
-        
-        for subject, keywords in common_subjects.items():
-            if any(keyword in columns_str for keyword in keywords):
-                return subject
-                
-        return "dataset"
 
-    def _generate_readme(self, narrative: str):
-        """Generate a README file with the analysis narrative and visualizations."""
-        readme_content = "# Data Analysis Narrative\n\n"
-        readme_content += narrative + "\n\n"
-        
-        readme_content += "## Visualizations\n\n"
-        for plot in self.plots:
-            readme_content += f"![{plot}]({plot})\n\n"
-            
-        readme_path = self.config.output_dir / 'README.md'
-        with open(readme_path, 'w', encoding='utf-8') as f:
-            f.write(readme_content)
-        print(f"\nREADME.md generated at: {readme_path}")
+def agentic_workflow(data_summary, feature_types):
+    """Performing iterative multi-step analysis based on LLM responses."""
+    print("Multiple step analysis")
+    prompt = generate_prompt(data_summary, feature_types)
+    initial_insights = query_chat_completion(prompt)
 
-def main():
-    """Main execution function."""
-    # Ensure the correct number of arguments is provided
+    if "missing values" in initial_insights.lower():
+        refinement_prompt = "You mentioned missing values. Suggest specific imputation strategies based on data types."
+        refinement = query_chat_completion(refinement_prompt)
+        return initial_insights + "\n" + refinement
+    else:
+        return initial_insights
+
+def generate_visualizations(df, output_folder):
+    print("Generating visualizations")
+    numeric_df = preprocessing_data(df)
+    visualization_df = preprocess_for_visualization(numeric_df)
+
+    if numeric_df.shape[1] > 1:
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(numeric_df.corr(), annot=True, cmap="coolwarm", cbar_kws={'shrink': 0.8})
+        plt.title("Correlation Heatmap", fontsize=16)
+        plt.xlabel("Features")
+        plt.ylabel("Features")
+        plt.savefig(os.path.join(output_folder, "correlation_heatmap.png"))
+        plt.close()
+
+    if visualization_df.shape[1] > 1:
+        model = IsolationForest(random_state=42)
+        visualization_df['outlier_score'] = model.fit_predict(visualization_df)
+        plt.figure(figsize=(8, 6))
+        sns.scatterplot(data=visualization_df, x=visualization_df.columns[0], y=visualization_df.columns[1], hue='outlier_score', palette="coolwarm")
+        plt.title("Outlier Detection (Scatter Plot)", fontsize=16)
+        plt.xlabel(visualization_df.columns[0])
+        plt.ylabel(visualization_df.columns[1])
+        plt.legend(title="Outliers")
+        plt.savefig(os.path.join(output_folder, "outlier_detection.png"))
+        plt.close()
+
+    if visualization_df.shape[1] > 1:
+        selected_columns = visualization_df.columns[:5]
+        sns.pairplot(visualization_df[selected_columns], palette="husl")
+        plt.savefig(os.path.join(output_folder, "pairplot_analysis.png"))
+        plt.close()
+
+    return [
+        os.path.join(output_folder, "correlation_heatmap.png"),
+        os.path.join(output_folder, "outlier_detection.png"),
+        os.path.join(output_folder, "pairplot_analysis.png")
+    ]
+
+def image_to_base64(image_path):
+    """ Images are converted into base 64. Base64 encoding is used for encoding binary data (such as images, files, or other non-text data) into a text format.
+    This encoding is useful in situations where binary data needs to be safely transmitted or stored in environments that primarily handle text."""
+    print("Converting images into base64")
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode("utf-8")
+
+def analyze_image_with_vision_api(image_path, model="gpt-4o-mini"):
+    
+    """Analyze an image using the OpenAI Vision API."""
+    print("Image analysis")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AIPROXY_TOKEN}"
+    }
+    payload = {
+    "model": model,
+    "messages": [{"role": "user", "content": "Analyze this image."}],
+    "image": image_to_base64(image_path),
+    }
+    response = requests.post(API_URL, headers=headers, json=payload)
+
+def llm_narrate_story(summary, insights, advanced_analyses, charts, special_analyses):
+    """Generate a cohesive and structured narrative story."""
+    print("Narrating summary")
+    special_analyses_summary = "\n".join(
+        f"{key.capitalize()} Analysis:\n" + "\n".join(value)
+        for key, value in special_analyses.items()
+    )
+    advanced_analyses_summary = "\n".join(
+        f"{key.capitalize()} Findings:\n{value}" for key, value in advanced_analyses.items()
+    )
+    prompt = (
+        f"The dataset has the following properties:\n{summary}\n"
+        f"Insights:\n{insights}\n"
+        f"Advanced Analysis:\n{advanced_analyses_summary}\n"
+        f"Special Analyses:\n{special_analyses_summary}\n"
+        f"The visualizations generated are: {', '.join(charts)}.\n"
+        "Please generate a well-structured Markdown report covering data properties, analysis, insights, visualizations, and implications. "
+        "Ensure that the content flows logically and highlights key findings with proper emphasis. "
+        "Use headings, bullet points, and descriptions to enhance readability."
+    )
+    return query_chat_completion(prompt)
+
+
+"""def save_readme(content):
+    #Save README file
+     with open('README.md', 'w', encoding='utf-8') as file:
+        file.write(content) 
+     print(f"README.md saved")"""
+
+def save_readme(content, output_folder):
+    readme_path = os.path.join(output_folder, "README.md")
+    with open(readme_path, "w") as readme_file:
+        readme_file.write(content)
+    print(f"README.md saved at {readme_path}")
+
+
+
+if __name__ == "__main__":
+    import sys
+    import os
+
     if len(sys.argv) != 2:
-        print("Usage: python script.py dataset.csv")
+        print("Usage: uv run autolysis.py <dataset.csv>")
         sys.exit(1)
 
-    file_path = sys.argv[1]
-    config = AnalysisConfig(output_dir=Path(Path(file_path).stem))
-    analyzer = DataAnalyzer(config)
-    analyzer.analyze_dataset(file_path)
+    dataset = sys.argv[1]
 
+    # Generate output folder name based on dataset name (without extension)
+    output_folder = os.path.splitext(os.path.basename(dataset))[0]
+    # Suppress the specific warning
+    warnings.filterwarnings("ignore", message="Ignoring `palette` because no `hue` variable has been assigned")
+    # Create the output folder dynamically
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+        print(f"Created output folder: {output_folder}")
+    else:
+        print(f"Output folder already exists: {output_folder}")
+
+    try:
+        df = load_data(dataset)
+
+        summary = generic_analysis_data(df)
+        print("Generic analysis completed.")
+        
+        df = preprocessing_data(df)
+
+        advanced_analyses = advanced_analysis(df)
+        print("Advanced analysis completed.")
+
+        features = detecting_features(df)
+
+        specific_analyses = perform_specific_analyses(df, features)
+
+        insights = agentic_workflow(summary, features)
+        print("LLM insights generated.")
+
+        charts = generate_visualizations(df, output_folder)  # Save visualizations in the output folder
+        print("Visualizations Generated.")
+
+        story = llm_narrate_story(summary, insights, advanced_analyses, charts, specific_analyses)
+        print("Narrative Done.")
+
+        #save_readme(story)  # Save README.md in the output folder
+        
+        save_readme(story, output_folder)  # Save README.md in the output folder
+        print(f"README.md generated in {output_folder}.")
+    except Exception as e:
+        print("Error:", e)
 if __name__ == "__main__":
     main()
