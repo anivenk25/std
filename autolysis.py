@@ -177,6 +177,8 @@ class DistributionPlot(VisualizationStrategy):
             plt.subplot(((n_cols + 1) // 2), 2, i)
             sns.histplot(df[col], kde=True)
             plt.title(f"Distribution of {col}")
+            plt.xlabel(col)
+            plt.ylabel("Frequency")
         
         plt.suptitle(f"Distribution Analysis - {title}")
         plt.tight_layout()
@@ -391,7 +393,6 @@ class LLMAnalyzer:
 
     def _generate_final_insights(self, df: pd.DataFrame):
         """Generate final insights after analysis."""
-        subject = self._determine_subject(df)
         # Create a summary of the numerical analysis
         numerical_summary = df.describe().to_string()
 
@@ -399,7 +400,7 @@ class LLMAnalyzer:
         missing_values = df.isnull().sum().to_string()
 
         insight_prompt = f"""
-        Analyze this {subject} dataset based on the following information:
+        Analyze this dataset based on the following information:
 
         1. Dataset Statistics:
         {numerical_summary}
@@ -415,14 +416,14 @@ class LLMAnalyzer:
         2. Important statistical findings
         3. Notable relationships between variables
         4. Insights about the distribution of ratings
-        5. Any interesting observations about {subject} and their characteristics
+        5. Any interesting observations about the dataset and their characteristics
         6. Recommendations for stakeholders
 
         Format the response with clear headers and bullet points.
         """
 
         messages = [
-            {"role": "system", "content": "You are a data analyst specializing in book data and user ratings analysis."},
+            {"role": "system", "content": "You are a data analyst specializing in dataset analysis."},
             {"role": "user", "content": insight_prompt}
         ]
 
@@ -499,106 +500,12 @@ class LLMAnalyzer:
                 return "Analysis of Ratings"  # Example genre
         return "Various Themes"  # Default genre if no keywords found
 
-class StatisticalAnalyzer:
-    """Enhanced statistical analyzer with method selection."""
-    def __init__(self):
-        self.methods = StatisticalMethods()
-        self.api_client = APIClient()
-        
-    @timeit
-    def select_analysis_methods(self, df: pd.DataFrame) -> List[str]:
-        """Use LLM to select appropriate statistical methods."""
-        # Convert dtypes to strings for JSON serialization
-        data_description = {
-            'shape': list(df.shape),
-            'dtypes': {col: str(dtype) for col, dtype in df.dtypes.items()},
-            'missing_values': df.isnull().sum().to_dict(),
-            'numeric_columns': df.select_dtypes(include=[np.number]).columns.tolist()
-        }
-        
-        prompt = f"""
-        Given the following dataset characteristics:
-        Shape: {data_description['shape']}
-        Data Types: {json.dumps(data_description['dtypes'], indent=2)}
-        Missing Values: {json.dumps(data_description['missing_values'], indent=2)}
-        Numeric Columns: {json.dumps(data_description['numeric_columns'], indent=2)}
-        
-        Available statistical methods:
-        1. basic_stats: Basic statistical summary
-        2. normality_test: Test for normal distribution
-        3. outlier_detection: Identify outliers using IQR
-        4. dimension_reduction: PCA for dimensionality reduction
-        
-        Select the most appropriate methods considering:
-        - Dataset size and characteristics
-        - Time constraint (analysis should complete within 3 minutes)
-        - Data types present
-        
-        Return a list of method names to apply.
-        """
-        
-        messages = [
-            {"role": "system", "content": "You are a statistical analysis expert."},
-            {"role": "user", "content": prompt}
-        ]
-        
-        response = self.api_client.make_request(messages)
-        if not response:
-            return ['basic_stats']
-            
-        methods = []
-        if 'basic_stats' in response.lower():
-            methods.append('basic_stats')
-        if 'normality' in response.lower():
-            methods.append('normality_test')
-        if 'outlier' in response.lower():
-            methods.append('outlier_detection')
-        if 'dimension' in response.lower() or 'pca' in response.lower():
-            methods.append('dimension_reduction')
-            
-        return methods
-
-    @timeit
-    def compute_advanced_stats(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Compute statistical analysis based on selected methods."""
-        selected_methods = self.select_analysis_methods(df)
-        results = {}
-        
-        numeric_df = df.select_dtypes(include=[np.number])
-        
-        for method in selected_methods:
-            try:
-                if method == 'basic_stats':
-                    results['basic_stats'] = self.methods.basic_stats(df)
-                
-                elif method == 'normality_test' and not numeric_df.empty:
-                    results['normality_tests'] = {
-                        col: self.methods.normality_test(numeric_df[col])
-                        for col in numeric_df.columns
-                    }
-                
-                elif method == 'outlier_detection' and not numeric_df.empty:
-                    results['outlier_analysis'] = {
-                        col: self.methods.outlier_detection(numeric_df[col])
-                        for col in numeric_df.columns
-                    }
-                
-                elif method == 'dimension_reduction' and not numeric_df.empty:
-                    if numeric_df.shape[1] > 2:
-                        results['dimension_reduction'] = self.methods.dimension_reduction(numeric_df)
-                
-            except Exception as e:
-                print(f"Error in {method}: {str(e)}")
-                continue
-                
-        return results
-
 class DataAnalyzer:
     """Enhanced data analyzer with comprehensive analysis capabilities."""
     def __init__(self, config: AnalysisConfig):
         self.config = config
         self.api_client = APIClient()
-        self.stats_analyzer = StatisticalAnalyzer()
+        self.stats_analyzer = StatisticalMethods()
         self.llm_analyzer = LLMAnalyzer()  # Integrate LLMAnalyzer
         self.visualization_strategies = [
             CorrelationHeatmap(),
