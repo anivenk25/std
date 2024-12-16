@@ -480,7 +480,6 @@ class DataAnalyzer:
         self.visualization_strategies = [
             CorrelationHeatmap(),
             DistributionPlot(),
-            BoxplotAnalysis(),
             TimeSeriesAnalysis()
         ]
         self.plots: List[str] = []
