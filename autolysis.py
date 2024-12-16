@@ -177,8 +177,8 @@ class BoxplotAnalysis(VisualizationStrategy):
         Create boxplots for numeric columns grouped by categorical columns.
         """
         # Reduce dataset size if needed
-        if len(df) > 10000:
-            df = df.sample(n=10000, random_state=42)
+        if len(df) > 5000:
+            df = df.sample(n=len(df), random_state=42)
 
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         categorical_cols = df.select_dtypes(include=["object", "category"]).columns
@@ -209,8 +209,8 @@ class TimeSeriesAnalysis(VisualizationStrategy):
         Create time series plots for datetime columns and numeric data.
         """
         # Reduce dataset size if needed
-        if len(df) > 10000:
-            df = df.sample(n=10000, random_state=42)
+        if len(df) > 5000:
+            df = df.sample(n=len(df), random_state=42)
 
         datetime_cols = df.select_dtypes(include=["datetime", "datetime64"]).columns
         numeric_cols = df.select_dtypes(include=[np.number]).columns
