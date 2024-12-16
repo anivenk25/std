@@ -502,12 +502,8 @@ class DataAnalyzer:
 
             insights = self._generate_insights(df,a)
             
-            if time.time() - start_time < self.config.time_limit:
-                narrative = self._generate_narrative(df, insights)
-                if narrative:
-                    self._generate_readme(narrative)
-            else:
-                print("Time limit reached, skipping narrative generation")
+            narrative = self._generate_narrative(df, insights)
+            self._generate_readme(narrative)
                 
         except Exception as e:
             print(f"Analysis failed: {str(e)}")
