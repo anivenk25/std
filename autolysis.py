@@ -1,23 +1,6 @@
 # /// script
 # requires-python = ">=3.8"
 # dependencies = [
-#     "requests",
-#     "pandas",
-#     "matplotlib",
-#     "seaborn",
-#     "numpy",
-#     "scipy",  # Added for statistical functions
-#     "chardet",  # Added for character encoding detection
-#     "colorlog",  # Added for colored logging
-#     "rich",  # Optional, for rich text formatting in logs
-# ]
-# description = "A script for data analysis and visualization."
-# entry-point = "autolysis.py"
-# ///
-
-# /// script
-# requires-python = ">=3.8"
-# dependencies = [
 #   "requests>=2.28.0",
 #    "pandas>=1.5.0",
 #    "matplotlib>=3.5.0",
