@@ -34,170 +34,11 @@ import sys
 from dataclasses import dataclass
 from enum import Enum, auto
 
-class StatTestType(Enum):
-    TTEST = auto()
-    ANOVA = auto()
-    CHI_SQUARE = auto()
-    CORRELATION = auto()
-    REGRESSION = auto()
-    NORMALITY = auto()
-    MANN_WHITNEY = auto()
-
-@dataclass
-class StatTestResult:
-    test_type: StatTestType
-    statistic: float
-    p_value: float
-    interpretation: str
-    additional_info: Dict[str, Any] = None
-
-class StatisticalAnalyzer:
-    """Handles statistical analysis operations."""
-    
-    # Define a constant for significance level
-    SIGNIFICANCE_LEVEL = 0.05
-
-    @staticmethod
-    def run_statistical_test(test_type: StatTestType, data: pd.DataFrame, 
-                           columns: List[str], **kwargs) -> StatTestResult:
-        """Run specified statistical test and return results."""
-        try:
-            # Check if columns are present in the DataFrame
-            if not all(col in data.columns for col in columns):
-                raise ValueError("One or more columns are not present in the DataFrame.")
-            
-            if test_type == StatTestType.TTEST:
-                return StatisticalAnalyzer._run_ttest(data, columns, **kwargs)
-            elif test_type == StatTestType.CORRELATION:
-                return StatisticalAnalyzer._run_correlation(data, columns)
-            elif test_type == StatTestType.NORMALITY:
-                return StatisticalAnalyzer._run_normality_test(data, columns[0])
-            elif test_type == StatTestType.CHI_SQUARE:
-                return StatisticalAnalyzer._run_chi_square(data, columns)
-            elif test_type == StatTestType.MANN_WHITNEY:
-                return StatisticalAnalyzer._run_mann_whitney(data, columns, **kwargs)
-            # TODO: Implement ANOVA and REGRESSION tests
-        except Exception as e:
-            return StatTestResult(
-                test_type=test_type,
-                statistic=float('nan'),
-                p_value=float('nan'),
-                interpretation=f"Test failed: {str(e)}"
-            )
-
-    @staticmethod
-    def _run_ttest(data: pd.DataFrame, columns: List[str], 
-                   paired: bool = False) -> StatTestResult:
-        """Perform t-test between two columns."""
-        if len(columns) != 2:
-            raise ValueError("T-test requires exactly two columns")
-            
-        col1, col2 = columns
-        if paired:
-            stat, p_value = stats.ttest_rel(data[col1], data[col2])
-        else:
-            stat, p_value = stats.ttest_ind(data[col1], data[col2])
-            
-        interpretation = (f"{'Paired' if paired else 'Independent'} t-test result: "
-                        f"{'Significant' if p_value < StatisticalAnalyzer.SIGNIFICANCE_LEVEL else 'Not significant'} "
-                        f"difference between {col1} and {col2}")
-        
-        return StatTestResult(StatTestType.TTEST, stat, p_value, interpretation)
-
-    @staticmethod
-    def _run_correlation(data: pd.DataFrame, columns: List[str]) -> StatTestResult:
-        """Perform correlation analysis between columns."""
-        corr_matrix = data[columns].corr()
-        
-        # Get average correlation excluding self-correlations
-        mask = ~np.eye(corr_matrix.shape[0], dtype=bool)
-        avg_corr = corr_matrix.where(mask).mean().mean()
-        
-        interpretation = (f"Average correlation between variables: {avg_corr:.3f}\n"
-                        f"Strongest correlation: {corr_matrix.unstack().sort_values()[-2]:.3f}")
-        
-        return StatTestResult(
-            StatTestType.CORRELATION,
-            avg_corr,
-            1.0,  # p-value not applicable
-            interpretation,
-            {'correlation_matrix': corr_matrix}
-        )
-
-    @staticmethod
-    def _run_normality_test(data: pd.DataFrame, column: str) -> StatTestResult:
-        """Perform Shapiro-Wilk normality test."""
-        stat, p_value = stats.shapiro(data[column])
-        
-        interpretation = (f"Normality test for {column}: "
-                        f"{'Normal' if p_value > StatisticalAnalyzer.SIGNIFICANCE_LEVEL else 'Non-normal'} distribution")
-        
-        return StatTestResult(StatTestType.NORMALITY, stat, p_value, interpretation)
-
-    @staticmethod
-    def _run_chi_square(data: pd.DataFrame, columns: List[str]) -> StatTestResult:
-        """Perform chi-square test of independence."""
-        contingency = pd.crosstab(data[columns[0]], data[columns[1]])
-        chi2, p_value, dof, expected = stats.chi2_contingency(contingency)
-        
-        interpretation = (f"Chi-square test between {columns[0]} and {columns[1]}: "
-                        f"{'Significant' if p_value < StatisticalAnalyzer.SIGNIFICANCE_LEVEL else 'No significant'} relationship")
-        
-        return StatTestResult(StatTestType.CHI_SQUARE, chi2, p_value, interpretation)
-
-    @staticmethod
-    def _run_mann_whitney(data: pd.DataFrame, columns: List[str], 
-                         group_col: str = None) -> StatTestResult:
-        """Perform Mann-Whitney U test."""
-        if group_col:
-            groups = data[group_col].unique()
-            if len(groups) != 2:
-                raise ValueError("Mann-Whitney test requires exactly two groups")
-            
-            group1 = data[data[group_col] == groups[0]][columns[0]]
-            group2 = data[data[group_col] == groups[1]][columns[0]]
-        else:
-            if len(columns) != 2:
-                raise ValueError("Mann-Whitney test requires exactly two columns")
-            group1 = data[columns[0]]
-            group2 = data[columns[1]]
-            
-        stat, p_value = stats.mannwhitneyu(group1, group2)
-        
-        interpretation = (f"Mann-Whitney U test result: "
-                        f"{'Significant' if p_value < StatisticalAnalyzer.SIGNIFICANCE_LEVEL else 'No significant'} "
-                        f"difference between groups")
-        
-        return StatTestResult(StatTestType.MANN_WHITNEY, stat, p_value, interpretation)
-
-    @staticmethod
-    def generate_plot(data: pd.DataFrame, columns: List[str], test_type: StatTestType):
-        """Generate plots based on the statistical test results."""
-        if test_type == StatTestType.CORRELATION:
-            plt.figure(figsize=(10, 6))
-            sns.heatmap(data[columns].corr(), annot=True, fmt=".2f", cmap='coolwarm')
-            plt.title('Correlation Matrix')
-            plt.savefig('correlation_matrix.png')
-            plt.close()
-        elif test_type == StatTestType.NORMALITY:
-            plt.figure(figsize=(10, 6))
-            sns.histplot(data[columns[0]], kde=True)
-            plt.title(f'Distribution of {columns[0]}')
-            plt.savefig(f'distribution_{columns[0]}.png')
-            plt.close()
-        elif test_type == StatTestType.CHI_SQUARE:
-            contingency = pd.crosstab(data[columns[0]], data[columns[1]])
-            sns.heatmap(contingency, annot=True, cmap='Blues')
-            plt.title(f'Chi-Square Test: {columns[0]} vs {columns[1]}')
-            plt.savefig(f'chi_square_{columns[0]}_{columns[1]}.png')
-            plt.close()
-        # Add more plots for other test types as needed
-
 class LLMAnalyzer:
     def __init__(self):
         self.token = os.getenv("AIPROXY_TOKEN")
         if not self.token:
-            raise EnvironmentError("AIPROXY_TOKEN is not set")
+            raise EnvironmentError("AIPROXY_TOKEN is not set. Please set it as an environment variable.")
 
         self.proxy_url = "https://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
         self.headers = {
@@ -205,9 +46,17 @@ class LLMAnalyzer:
             "Authorization": f"Bearer {self.token}",
         }
         self.figure_counter = 0
-        self.plots = []
-        self.stat_analyzer = StatisticalAnalyzer()
-        self.analysis_results = []
+        self.plots = []  # Store plot filenames
+
+    def _save_and_close_plot(self, title: str):
+        """Save the current plot to a file and close it."""
+        self.figure_counter += 1
+        filename = f'plot_{self.figure_counter}.png'
+        plt.title(title)
+        plt.savefig(filename)
+        self.plots.append(filename)  # Store the filename
+        print(f"Plot saved as: {filename}")
+        plt.close()
 
     def _make_llm_request(self, messages: List[Dict[str, str]]) -> Optional[str]:
         """Make a request to the LLM API with error handling."""
@@ -226,151 +75,169 @@ class LLMAnalyzer:
             print(f"Error parsing API response: {str(e)}")
             return None
 
-    def _send_plots_for_insights(self) -> str:
-        """Send generated plots to the LLM and get insights."""
-        insights = ""
-        for plot in self.plots:
-            messages = [
-                {"role": "system", "content": "You are a data analyst specializing in interpreting visual data."},
-                {"role": "user", "content": f"Please analyze the following plot and provide insights: {plot}"}
-            ]
-            plot_insight = self._make_llm_request(messages)
-            if plot_insight:
-                insights += f"\nInsights from {plot}:\n{plot_insight}\n"
-        return insights
+    def _extract_code_blocks(self, content: str) -> List[str]:
+        """Extract Python code blocks from markdown-formatted text."""
+        code_blocks = re.findall(r'```python\n(.*?)\n```', content, re.DOTALL)
+        return code_blocks if code_blocks else []
 
-    def _request_statistical_tests(self, df: pd.DataFrame) -> List[Tuple[StatTestType, List[str]]]:
-        """Request the LLM to suggest statistical tests based on the dataset."""
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
-
-        prompt = f"""
-        Given the following dataset characteristics, suggest relevant statistical tests to perform within 2 minutes:
-        
-        Numeric Columns: {numeric_cols}
-        Categorical Columns: {categorical_cols}
-        
-        Please respond in the following format:
-        - TestType: [Column1, Column2]
-        - TestType: [Column1]
-        """
-
-        messages = [
-            {"role": "system", "content": "You are a data analyst who suggests statistical tests based on dataset characteristics."},
-            {"role": "user", "content": prompt}
-        ]
-
-        response = self._make_llm_request(messages)
-        return self._parse_llm_response(response)
-
-    def _parse_llm_response(self, response: str) -> List[Tuple[StatTestType, List[str]]]:
-        """Parse the LLM response to extract statistical tests and columns."""
-        tests = []
-        lines = response.strip().split('\n')
-        for line in lines:
-            if line.startswith('-'):
-                parts = line[1:].strip().split(':')
-                test_type_str = parts[0].strip()
-                columns = eval(parts[1].strip())  # Convert string representation of list to actual list
-                test_type = StatTestType[test_type_str.upper().replace(" ", "_")]
-                tests.append((test_type, columns))
-        return tests
-
-    def _determine_statistical_tests(self, df: pd.DataFrame) -> List[Tuple[StatTestType, List[str]]]:
-        """Determine appropriate statistical tests based on data characteristics."""
-        # First, try to get suggestions from the LLM
+    def _execute_code_safely(self, code: str, df: pd.DataFrame) -> tuple[bool, Optional[str]]:
+        """Execute code with safety measures and return success status and error message."""
         try:
-            return self._request_statistical_tests(df)
+            # Ensure the code uses the provided DataFrame
+            if 'pd.read_csv' in code:
+                raise ValueError("Code should not read from CSV files directly. Use the provided DataFrame 'df'.")
+
+            # Modify the code to save plots instead of showing them
+            code = code.replace('plt.show()', 'analyzer._save_and_close_plot("Generated Plot")')
+
+            # Create a restricted locals dictionary with only necessary objects
+            local_dict = {
+                'pd': pd, 
+                'plt': plt, 
+                'sns': sns, 
+                'df': df, 
+                'analyzer': self
+            }
+
+            # Execute the code in the restricted environment
+            exec(code, {'__builtins__': __builtins__}, local_dict)
+
+            return True, None
         except Exception as e:
-            print(f"Error requesting statistical tests: {str(e)}")
-            return self._default_statistical_tests(df)
+            error_msg = f"Error: {str(e)}\nTraceback:\n{traceback.format_exc()}"
+            return False, error_msg
 
-    def _default_statistical_tests(self, df: pd.DataFrame) -> List[Tuple[StatTestType, List[str]]]:
-        """Fallback method to determine statistical tests based on the dataset."""
-        tests = []
-        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        categorical_cols = df.select_dtypes(include=['object']).columns.tolist()
+    def _fix_code_recursively(self, code: str, error_msg: str, df: pd.DataFrame, max_attempts: int = 3) -> bool:
+        """Recursively try to fix code using LLM until it works or max attempts reached."""
+        attempt = 0
+        while attempt < max_attempts:
+            fix_prompt = f"""
+            The following Python code generated an error:
+            ```python
+            {code}
+            ```
 
-        # Correlation analysis for numeric columns
-        if len(numeric_cols) >= 2:
-            tests.append((StatTestType.CORRELATION, numeric_cols))
+            Error message:
+            {error_msg}
 
-        # Normality tests for important numeric columns
-        for col in numeric_cols:  # Test all numeric columns
-            tests.append((StatTestType.NORMALITY, [col]))
+            Please provide a fixed version of the code that:
+            1. Handles the error properly
+            2. Uses only pandas, matplotlib.pyplot, and seaborn
+            3. Works with the DataFrame that has these columns: {df.columns.tolist()}
+            4. Includes proper error handling
+            5. Uses plt.figure() before creating each plot
+            6. Uses plt.show() after each plot is complete
+            7. Does not reference any specific CSV files
 
-        # Chi-square tests for categorical columns
-        if len(categorical_cols) >= 2:
-            for i in range(len(categorical_cols) - 1):
-                for j in range(i + 1, len(categorical_cols)):
-                    tests.append((StatTestType.CHI_SQUARE, 
-                                [categorical_cols[i], categorical_cols[j]]))
+            Provide ONLY the corrected code block, no explanations.
+            """
 
-        # Regression analysis if we have potential target variables
-        if len(numeric_cols) >= 3:
-            tests.append((StatTestType.REGRESSION, numeric_cols))
+            messages = [
+                {"role": "system", "content": "You are a Python expert focused on data analysis and visualization."},
+                {"role": "user", "content": fix_prompt}
+            ]
 
-        return tests
+            fixed_content = self._make_llm_request(messages)
+            if not fixed_content:
+                return False
 
-    def _run_statistical_analysis(self, df: pd.DataFrame) -> str:
-        """Run statistical analysis and return formatted results."""
-        tests = self._determine_statistical_tests(df)
-        results = []
+            fixed_code_blocks = self._extract_code_blocks(fixed_content)
+            if not fixed_code_blocks:
+                fixed_code = fixed_content  # If no code blocks found, try using the entire response
+            else:
+                fixed_code = fixed_code_blocks[0]
 
-        for test_type, columns in tests:
-            try:
-                result = self.stat_analyzer.run_statistical_test(test_type, df, columns)
-                self.stat_analyzer.generate_plot(df, columns, test_type)  # Generate plots
-                self.plots.append(f"{test_type.name.lower()}_{columns[0]}_{columns[1] if len(columns) > 1 else ''}.png")  # Track plots
-                self.analysis_results.append(result)
-                results.append(f"\n{result.interpretation}")
-            except Exception as e:
-                print(f"Error running {test_type} test: {str(e)}")
+            success, new_error = self._execute_code_safely(fixed_code, df)
+            if success:
+                return True
 
-        return "\n".join(results)
+            error_msg = new_error
+            attempt += 1
+
+        return False
 
     def analyze_dataset(self, file_path: str):
-        """Main method to analyze the dataset with enhanced statistical analysis."""
+        """Main method to analyze the dataset."""
         try:
-            # Validate the file path
-            if not Path(file_path).is_file():
-                raise FileNotFoundError(f"The file {file_path} does not exist.")
+            # Validate file path
+            path = Path(file_path)
+            if not path.exists():
+                raise FileNotFoundError(f"The file '{file_path}' does not exist.")
+            if not path.is_file():
+                raise ValueError(f"'{file_path}' is not a file.")
+            if path.suffix.lower() != '.csv':
+                raise ValueError(f"'{file_path}' is not a CSV file.")
 
-            # Detect encoding
-            with open(file_path, 'rb') as f:
-                result = chardet.detect(f.read())
-                encoding = result['encoding']
-                print(f"Detected encoding: {encoding}")
+            print(f"Loading dataset from: {file_path}")
 
-            df = pd.read_csv(file_path, encoding=encoding)
+            # Load and validate dataset with error handling for encoding
+            try:
+                df = pd.read_csv(file_path, encoding='utf-8')  # Try UTF-8 first
+            except UnicodeDecodeError:
+                print("UTF-8 decoding failed, trying ISO-8859-1 encoding...")
+                df = pd.read_csv(file_path, encoding='ISO-8859-1')  # Fallback to ISO-8859-1
+            except pd.errors.EmptyDataError:
+                raise ValueError("The CSV file is empty.")
+            except pd.errors.ParserError:
+                raise ValueError("Error parsing the CSV file. Please ensure it's properly formatted.")
+
+            if df.empty:
+                raise ValueError("Dataset is empty")
+
             print(f"Successfully loaded dataset with shape: {df.shape}")
 
-            # Run statistical analysis
-            print("\nPerforming statistical analysis...")
-            statistical_results = self._run_statistical_analysis(df)
-            print("Statistical analysis completed.")
-
-            # Generate insights from plots
-            plot_insights = self._send_plots_for_insights()
-
-            # Generate initial data description with statistical insights
+            # Generate initial data description
             data_description = (
                 f"Dataset Overview:\n"
                 f"Columns: {df.columns.tolist()}\n"
                 f"Shape: {df.shape}\n"
                 f"Sample data:\n{df.head(3).to_string()}\n"
-                f"Data types:\n{df.dtypes.to_string()}\n"
-                f"\nStatistical Findings:\n{statistical_results}"
-                f"\n\nPlot Insights:\n{plot_insights}"
+                f"Data types:\n{df.dtypes.to_string()}"
             )
 
-            # Generate insights
-            insights = self._generate_final_insights(df)
-            if insights:
-                insights = self._enhance_insights_with_statistics(insights, self.analysis_results)
+            print("\nGenerating analysis...")
 
-            # Include insights in the story
-            story = self._generate_epic_story(df, insights, plot_insights)
+            # Get initial analysis suggestions
+            initial_prompt = f"""
+            Given this dataset description:
+            {data_description}
+
+            Generate Python code that:
+            1. Creates meaningful visualizations using matplotlib and seaborn
+            2. Calculates relevant summary statistics
+            3. Identifies key patterns or relationships
+            4. Handles potential errors (missing values, invalid data)
+            5. Uses plt.figure() before creating each plot
+            6. Uses plt.show() after each plot is complete
+            7. Does not reference any specific CSV files
+
+            Provide the code in a Python code block.
+            """
+
+            messages = [
+                {"role": "system", "content": "You are a data scientist specialized in exploratory data analysis."},
+                {"role": "user", "content": initial_prompt}
+            ]
+
+            # Get and execute initial analysis
+            analysis_content = self._make_llm_request(messages)
+            if analysis_content:
+                code_blocks = self._extract_code_blocks(analysis_content)
+                for code in code_blocks:
+                    success, error_msg = self._execute_code_safely(code, df)
+                    if not success:
+                        print(f"Initial code execution failed. Attempting to fix...")
+                        if not self._fix_code_recursively(code, error_msg, df):
+                            print("Failed to fix code after maximum attempts")
+
+            # Generate final insights
+            insights = self._generate_final_insights(df)
+
+            # Generate the epic story
+            print("\nGenerating the epic story...")
+            story = self._generate_epic_story(df, insights)
+            
+            # Generate README.md
             if story:
                 self.generate_readme(story)
 
@@ -421,7 +288,7 @@ class LLMAnalyzer:
             print(insights)
             return str(insights)
 
-    def _generate_epic_story(self, df: pd.DataFrame, insights: str, plot_insights: str):
+    def _generate_epic_story(self, df: pd.DataFrame, insights):
         """Generate an epic narrative based on the data analysis."""
         # Create summaries for context
         numerical_summary = df.describe().to_string()
@@ -442,11 +309,8 @@ class LLMAnalyzer:
 
         - {self.figure_counter} enchanting illustrations conjured from the depths of analysis, each revealing a facet of {subject}.
 
-        **Statistical Insights:**
-        - {insights}
-
-        **Plot Insights:**
-        - {plot_insights}
+        **Final Insights:**
+        - {insights}  
 
         Craft a heartwarming narrative that unfolds like a contemporary {genre}, filled with emotional growth and profound insights (IMPORTANT : REFER AND USE THE FINAL INSIGHTS SECTION THROUGHOUT THE STORY AND MAKE SURE THAT THE STORY IS CONSISTENT WITH THEM also for every claim made weave in the numbers too also make the process of coming to every conclusion summer dramatic)
 
@@ -510,10 +374,14 @@ def main():
     """Main function to run the analysis."""
     try:
         if len(sys.argv) != 2:
-            print("Usage: python script.py dataset.csv")
+            print("Usage: uv run autolysis.py dataset.csv")
             sys.exit(1)
 
         file_path = sys.argv[1]
+        if not Path(file_path).exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        # Initialize and run analyzer
         analyzer = LLMAnalyzer()
         analyzer.analyze_dataset(file_path)
 
@@ -521,6 +389,9 @@ def main():
         print(f"Program failed: {str(e)}")
         traceback.print_exc()
         sys.exit(1)
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
