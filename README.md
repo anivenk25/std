@@ -65,7 +65,7 @@ This script is designed for data analysis and visualization using Python. It lev
 ## Usage
 To run the script, use the following command in your terminal:
 ```bash 
-uv pip autolysis *.csv
+uv run autolysis *.csv
 ```
 
 
